@@ -1,0 +1,912 @@
+[
+ {
+  "action": "backInNoteHistory",
+  "section": "note-navigation",
+  "keys": [
+   "Alt+Left"
+  ],
+  "mac_keys": [
+   "CommandOrControl+["
+  ],
+  "scope": "window"
+ },
+ {
+  "action": "forwardInNoteHistory",
+  "section": "note-navigation",
+  "keys": [
+   "Alt+Right"
+  ],
+  "mac_keys": [
+   "CommandOrControl+]"
+  ],
+  "scope": "window"
+ },
+ {
+  "action": "jumpToNote",
+  "section": "note-navigation",
+  "keys": [
+   "CommandOrControl+J"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "openTodayNote",
+  "section": "note-navigation",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "commandPalette",
+  "section": "note-navigation",
+  "keys": [
+   "CommandOrControl+Shift+J"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "scrollToActiveNote",
+  "section": "note-navigation",
+  "keys": [
+   "CommandOrControl+."
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "quickSearch",
+  "section": "note-navigation",
+  "keys": [
+   "CommandOrControl+S"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "searchInSubtree",
+  "section": "note-navigation",
+  "keys": [
+   "CommandOrControl+Shift+S"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "expandSubtree",
+  "section": "note-navigation",
+  "keys": [],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "collapseTree",
+  "section": "note-navigation",
+  "keys": [
+   "Alt+C"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "collapseSubtree",
+  "section": "note-navigation",
+  "keys": [
+   "Alt+-"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "sortChildNotes",
+  "section": "note-navigation",
+  "keys": [
+   "Alt+S"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "toggleArchivedNotes",
+  "section": "note-navigation",
+  "keys": [
+   "Ctrl+H",
+   "CommandOrControl+Shift+H"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "createNoteAfter",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "CommandOrControl+O"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "createNoteInto",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "CommandOrControl+P"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "createNoteIntoInbox",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "global:CommandOrControl+Alt+P"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "deleteNotes",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "Delete"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "moveNoteUp",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "CommandOrControl+Up"
+  ],
+  "mac_keys": [
+   "Alt+Up"
+  ],
+  "scope": null
+ },
+ {
+  "action": "moveNoteDown",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "CommandOrControl+Down"
+  ],
+  "mac_keys": [
+   "Alt+Down"
+  ],
+  "scope": null
+ },
+ {
+  "action": "moveNoteUpInHierarchy",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "CommandOrControl+Left"
+  ],
+  "mac_keys": [
+   "Alt+Left"
+  ],
+  "scope": null
+ },
+ {
+  "action": "moveNoteDownInHierarchy",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "CommandOrControl+Right"
+  ],
+  "mac_keys": [
+   "Alt+Right"
+  ],
+  "scope": null
+ },
+ {
+  "action": "editNoteTitle",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "Enter"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "editBranchPrefix",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "F2"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "cloneNotesTo",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "CommandOrControl+Shift+C"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "moveNotesTo",
+  "section": "creating-and-moving-notes",
+  "keys": [
+   "CommandOrControl+Shift+X"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "copyNotesToClipboard",
+  "section": "note-clipboard",
+  "keys": [
+   "CommandOrControl+C"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "pasteNotesFromClipboard",
+  "section": "note-clipboard",
+  "keys": [
+   "CommandOrControl+V"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "cutNotesToClipboard",
+  "section": "note-clipboard",
+  "keys": [
+   "CommandOrControl+X"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "selectAllNotesInParent",
+  "section": "note-clipboard",
+  "keys": [
+   "CommandOrControl+A"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "addNoteAboveToSelection",
+  "section": "note-clipboard",
+  "keys": [
+   "Shift+Up"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "addNoteBelowToSelection",
+  "section": "note-clipboard",
+  "keys": [
+   "Shift+Down"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "duplicateSubtree",
+  "section": "note-clipboard",
+  "keys": [],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "duplicateNote",
+  "section": "note-clipboard",
+  "keys": [],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "openNewTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+T"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "closeActiveTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+W"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "reopenLastTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+Shift+T"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "activateNextTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+Tab",
+   "CommandOrControl+PageDown"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "activatePreviousTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+Shift+Tab",
+   "CommandOrControl+PageUp"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "openNewWindow",
+  "section": "tabs-and-windows",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleTray",
+  "section": "tabs-and-windows",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleZenMode",
+  "section": "tabs-and-windows",
+  "keys": [
+   "F9"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "firstTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+1"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "secondTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+2"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "thirdTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+3"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "fourthTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+4"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "fifthTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+5"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "sixthTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+6"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "seventhTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+7"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "eigthTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+8"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "ninthTab",
+  "section": "tabs-and-windows",
+  "keys": [
+   "CommandOrControl+9"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "lastTab",
+  "section": "tabs-and-windows",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "openNewNoteSplit",
+  "section": "split-view",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "closeActiveNoteSplit",
+  "section": "split-view",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "moveActiveNoteSplitLeft",
+  "section": "split-view",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "moveActiveNoteSplitRight",
+  "section": "split-view",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "focusNoteSplitLeft",
+  "section": "split-view",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "focusNoteSplitRight",
+  "section": "split-view",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showNoteSource",
+  "section": "dialogs",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showOptions",
+  "section": "dialogs",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showRevisions",
+  "section": "dialogs",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showRecentChanges",
+  "section": "dialogs",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showDeletedNotes",
+  "section": "dialogs",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showSQLConsole",
+  "section": "dialogs",
+  "keys": [
+   "Alt+O"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showBackendLog",
+  "section": "dialogs",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showSpaceUsage",
+  "section": "dialogs",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showHelp",
+  "section": "dialogs",
+  "keys": [
+   "F1"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showCheatsheet",
+  "section": "dialogs",
+  "keys": [
+   "Shift+F1"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "showShortcutHints",
+  "section": "dialogs",
+  "keys": [
+   "Alt+F1"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "addLinkToText",
+  "section": "text-note-operations",
+  "keys": [
+   "CommandOrControl+L"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "followLinkUnderCursor",
+  "section": "text-note-operations",
+  "keys": [
+   "CommandOrControl+Enter"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "insertDateTimeToText",
+  "section": "text-note-operations",
+  "keys": [
+   "Alt+T"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "pasteMarkdownIntoText",
+  "section": "text-note-operations",
+  "keys": [],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "cutIntoNote",
+  "section": "text-note-operations",
+  "keys": [],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "addIncludeNoteToText",
+  "section": "text-note-operations",
+  "keys": [],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "editReadOnlyNote",
+  "section": "text-note-operations",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "addNewLabel",
+  "section": "attributes-labels-and-relations",
+  "keys": [
+   "Alt+L"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "addNewRelation",
+  "section": "attributes-labels-and-relations",
+  "keys": [
+   "Alt+R"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabClassicEditor",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabBasicProperties",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabBookProperties",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabFileProperties",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabImageProperties",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabOwnedAttributes",
+  "section": "note-panels",
+  "keys": [
+   "Alt+A"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabInheritedAttributes",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabPromotedAttributes",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabNoteMap",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabNoteInfo",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabNotePaths",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRibbonTabSimilarNotes",
+  "section": "note-panels",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleRightPane",
+  "section": "other",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "peekRightPane",
+  "section": "other",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "printActiveNote",
+  "section": "other",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "exportAsPdf",
+  "section": "other",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "openNoteExternally",
+  "section": "other",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "renderActiveNote",
+  "section": "other",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "runActiveNote",
+  "section": "other",
+  "keys": [
+   "CommandOrControl+Enter"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "toggleNoteHoisting",
+  "section": "other",
+  "keys": [
+   "Alt+H"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "unhoist",
+  "section": "other",
+  "keys": [
+   "Alt+U"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "reloadFrontendApp",
+  "section": "other",
+  "keys": [
+   "F5",
+   "CommandOrControl+R"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "openDevTools",
+  "section": "other",
+  "keys": [
+   "CommandOrControl+Shift+I"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "findInText",
+  "section": "other",
+  "keys": [
+   "CommandOrControl+F"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleLeftPane",
+  "section": "other",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "toggleFullscreen",
+  "section": "other",
+  "keys": [
+   "F11"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "zoomOut",
+  "section": "other",
+  "keys": [
+   "CommandOrControl+-"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "zoomIn",
+  "section": "other",
+  "keys": [
+   "CommandOrControl+=",
+   "CommandOrControl+Plus"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "zoomReset",
+  "section": "other",
+  "keys": [
+   "CommandOrControl+0"
+  ],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "copyWithoutFormatting",
+  "section": "other",
+  "keys": [
+   "CommandOrControl+Alt+C"
+  ],
+  "mac_keys": null,
+  "scope": null
+ },
+ {
+  "action": "forceSaveRevision",
+  "section": "other",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ },
+ {
+  "action": "saveNamedRevision",
+  "section": "other",
+  "keys": [],
+  "mac_keys": null,
+  "scope": "window"
+ }
+]

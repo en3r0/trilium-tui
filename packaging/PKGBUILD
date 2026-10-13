@@ -1,0 +1,28 @@
+# Maintainer: en3r0
+# Local build: run `makepkg -si` in this directory after copying the repo tree next to it, or point `source` at your git remote.
+pkgname=trilium-tui
+pkgver=0.0.1
+pkgrel=1
+pkgdesc='Fast terminal client for Trilium Next (local replica + sync, scriptable CLI)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/TriliumNext/Trilium'
+license=('AGPL-3.0-or-later')
+depends=('gcc-libs' 'openssl')
+optdepends=('wl-clipboard: system clipboard in the editor' 'xdg-utils: open links and files')
+makedepends=('cargo')
+# Replace with the project's git URL once it has one; `makepkg` then builds from that checkout.
+source=()
+build() {
+  cd "$startdir/.."
+  cargo build --release --locked --target-dir "$srcdir/target"
+}
+package() {
+  cd "$startdir/.."
+  install -Dm755 "$srcdir/target/release/trilium-tui" "$pkgdir/usr/bin/trilium-tui"
+  install -Dm755 "$srcdir/target/release/trilium-cli" "$pkgdir/usr/bin/trilium-cli"
+  install -Dm644 packaging/trilium-tui.desktop "$pkgdir/usr/share/applications/trilium-tui.desktop"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  "$srcdir/target/release/trilium-cli" completions bash | install -Dm644 /dev/stdin "$pkgdir/usr/share/bash-completion/completions/trilium-cli"
+  "$srcdir/target/release/trilium-cli" completions zsh | install -Dm644 /dev/stdin "$pkgdir/usr/share/zsh/site-functions/_trilium-cli"
+  "$srcdir/target/release/trilium-cli" completions fish | install -Dm644 /dev/stdin "$pkgdir/usr/share/fish/vendor_completions.d/trilium-cli.fish"
+}

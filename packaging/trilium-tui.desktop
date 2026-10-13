@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Trilium Notes (TUI)
+GenericName=Notes
+Comment=Fast terminal client for Trilium Next
+Exec=omarchy launch or focus tui --app-id=trilium-tui trilium-tui
+Terminal=false
+Categories=Office;
+Keywords=notes;trilium;

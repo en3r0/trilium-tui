@@ -1,0 +1,31 @@
+[package]
+name = "trilium-tui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+dirs = "7.0.0"
+ego-tree = "0.11.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+nucleo-matcher = "0.3.1"
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+ratatui = "0.30.2"
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
+regex = "1.13.1"
+scraper = "0.27.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+similar = "3.2.0"
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
+tempfile = "3.27.0"
+libc = "0.2"
+signal-hook = "0.3"
+trilium-core = { path = "../trilium-core" }
+unicode-width = "0.2.2"
+
+[dev-dependencies]
+rusqlite = "0.40.2"
+tempfile = "3.27.0"
