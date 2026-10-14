@@ -5,7 +5,7 @@
 <p align="center">
   <img src="docs/media/demo.gif" alt="trilium-tui demo: browsing notes, editing in place, search, command palette" width="800">
 </p>
-<p align="center"><a href="docs/media/demo.mp4">Watch the demo as a video (MP4, 48 s, with key hints)</a></p>
+<p align="center"><a href="docs/media/demo.mp4">Watch the demo as a video (MP4, 85 s, with key hints)</a></p>
 
 trilium-tui keeps a **local copy** of your notes and talks to your Trilium server in the background, using the same sync protocol as the official desktop app. Every keystroke is handled locally, so the interface never waits on the network. No server? It works fully offline too.
 
@@ -65,7 +65,9 @@ Press **`F1`** inside the app for the full key list.
 | `Ctrl+S` or `/` | search titles and content |
 | `:` or `Ctrl+Shift+J` | command palette (import, export, protect, sync, ...) |
 | `e` | edit the open note in place; `Ctrl+S` saves, `Esc` closes |
-| `Ctrl+e` | edit the stored source (HTML, Markdown or code) instead |
+| `Ctrl+e` | edit the stored source (HTML, Markdown or code) in the built-in editor |
+| `E` (Shift+E) | edit the source in your `$EDITOR` (nvim, helix, ...) |
+| `Alt+P` / `Alt+V` | while editing: insert a picture from a file or the clipboard / show pictures inline |
 | `a` / `c` | append a line to the note / capture a line into today's journal |
 | `t` | open today's journal note |
 | `Ctrl+T` / `Ctrl+W` | new / close tab |
@@ -82,8 +84,9 @@ Keys follow the Trilium web app wherever a terminal allows. Rebind them in `~/.c
 | ![Reading a note](docs/media/garden.png) **Read.** Notes are rendered for the terminal: lists, tables, to-do items, quotes, images. | ![Editing in place](docs/media/edit.png) **Edit in place.** Formatted text, no tags, with a hint bar for the keys. |
 | ![Code note with syntax highlighting](docs/media/code.png) **Code notes** are highlighted in your terminal's own palette (it follows the Omarchy theme). | ![Search](docs/media/search.png) **Search** with Trilium's query syntax, results with their path. |
 | ![Command palette](docs/media/palette.png) **Command palette** for everything else: import, export, sync, protect, journal. | ![Zen mode](docs/media/zen.png) **Zen mode** hides all chrome and centres the text. |
+| ![A picture inside a note](docs/media/picture.png) **Pictures** are attached with `Alt+P` and shown inline (sixel, kitty or iTerm2 graphics where the terminal supports them, half-blocks elsewhere). | ![The note's source in nvim](docs/media/source.png) **Source editing** with `Shift+E` opens the stored HTML in your `$EDITOR`; saving it updates the note. |
 
-(Demo screenshots use a made-up notebook, not real data.)
+(Demo screenshots use a made-up notebook, not real data. The cat photo is ["Tabby cat with blue eyes"](https://commons.wikimedia.org/wiki/File:Tabby_cat_with_blue_eyes-3336579.jpg) from Wikimedia Commons, released under CC0 and cropped.)
 
 ## Use it from scripts
 
