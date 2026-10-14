@@ -113,12 +113,34 @@ pub fn cleanup_temp() { for d in TEMP_DIRS.lock().unwrap().drain(..) { let _ = s
 /// Choose the image protocol. The terminal query (which finds sixel / kitty / iTerm2 support and the font size)
 /// only runs on terminals known to answer it immediately; elsewhere, and inside tmux, pictures are drawn with
 /// half-block characters, which work everywhere. `TRILIUM_TUI_IMAGES=halfblocks` forces that, `=query` forces the query.
+/// Terminals known to speak a graphics protocol, looked for among the processes above this one: `TERM` can't be trusted
+/// (Omarchy's foot sets `term=xterm-256color`), and asking an arbitrary terminal risks a stall.
+fn graphics_terminal_ancestor() -> bool { has_known_ancestor(std::process::id()) }
+
+fn has_known_ancestor(start: u32) -> bool {
+    const KNOWN: &[&str] = &["foot", "kitty", "ghostty", "wezterm"];
+    let mut pid = start;
+    for _ in 0..10 {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return false };
+        // "pid (comm) state ppid ...": comm may hold spaces or parentheses, so cut at the last ')'
+        let Some(close) = stat.rfind(')') else { return false };
+        let Some(open) = stat.find('(') else { return false };
+        let comm = &stat[open + 1..close];
+        if comm == "tmux" || comm.starts_with("tmux:") { return false; }
+        if KNOWN.iter().any(|k| comm.starts_with(k)) { return true; }
+        let Some(ppid) = stat[close + 1..].split_whitespace().nth(1).and_then(|p| p.parse::<u32>().ok()) else { return false };
+        if ppid <= 1 { return false; }
+        pid = ppid;
+    }
+    false
+}
+
 pub fn make_picker() -> Picker {
     let mode = std::env::var("TRILIUM_TUI_IMAGES").unwrap_or_default();
     let env = |k: &str| std::env::var(k).is_ok_and(|v| !v.is_empty());
     let term = std::env::var("TERM").unwrap_or_default();
     let known = term.contains("foot") || term.contains("kitty") || term.contains("ghostty") || term.contains("wezterm")
-        || env("KITTY_WINDOW_ID") || env("GHOSTTY_RESOURCES_DIR") || env("WEZTERM_EXECUTABLE") || env("ITERM_SESSION_ID") || env("KONSOLE_VERSION");
+        || env("KITTY_WINDOW_ID") || env("GHOSTTY_RESOURCES_DIR") || env("WEZTERM_EXECUTABLE") || env("ITERM_SESSION_ID") || env("KONSOLE_VERSION") || graphics_terminal_ancestor();
     let query = match mode.as_str() { "halfblocks" => false, "query" => true, _ => known && !env("TMUX") };
     if query { Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()) } else { Picker::halfblocks() }
 }
@@ -127,6 +149,28 @@ pub fn make_picker() -> Picker {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn a_graphics_terminal_is_found_among_the_ancestors_and_tmux_hides_it() {
+        use std::io::BufRead;
+        let dir = tempfile::tempdir().unwrap();
+        let mut found = vec![];
+        for (name, want) in [("foot", true), ("kitty", true), ("xterm", false), ("tmux", false)] {
+            // a process whose command name is `name`, running a child; walk up from the child
+            let link = dir.path().join(name);
+            std::os::unix::fs::symlink("/bin/sh", &link).unwrap();
+            let mut parent = std::process::Command::new(&link).args(["-c", "sleep 5 & echo $!; wait"]).stdout(std::process::Stdio::piped()).spawn().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(parent.stdout.take().unwrap()).read_line(&mut line).unwrap();
+            let child: u32 = line.trim().parse().unwrap();
+            found.push((name, has_known_ancestor(child), want));
+            let _ = std::process::Command::new("kill").arg(child.to_string()).status();
+            let _ = parent.kill();
+            let _ = parent.wait();
+        }
+        for (name, got, want) in found { assert_eq!(got, want, "{name}"); }
+        assert!(!has_known_ancestor(u32::MAX), "a pid that doesn't exist ends the walk");
+    }
     use ratatui_image::{StatefulImage, picker::ProtocolType};
 
     fn png() -> Vec<u8> {
