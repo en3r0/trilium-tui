@@ -319,7 +319,7 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(v) = app.view.as_ref() {
         let total = v.cache.as_ref().map_or(0, |c| c.2.len());
         let h = content_r.height as usize;
-        if total > h && h > 0 {
+        if total > h && h > 0 && app.scrollbar_visible(&v.id, v.scroll) {
             let mut st = ScrollbarState::new(total - h).position(v.scroll.min(total - h)).viewport_content_length(h);
             let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None).track_symbol(None).thumb_symbol("┃").thumb_style(focus_style(focused));
             f.render_stateful_widget(sb, Rect { y: content_r.y, height: content_r.height, ..area }, &mut st);
@@ -605,7 +605,7 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let scroll = app.help_scroll.get().min(max);
     app.help_scroll.set(scroll);
     f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), Rect { x: inner.x + 1, width: inner.width.saturating_sub(2), ..inner });
-    if max > 0 {
+    if max > 0 && app.scrollbar_visible("\0help", scroll) {
         let mut st = ScrollbarState::new(max).position(scroll).viewport_content_length(inner.height as usize);
         f.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None).track_symbol(None).thumb_symbol("┃").thumb_style(Style::default().fg(Color::Cyan)), r, &mut st);
     }

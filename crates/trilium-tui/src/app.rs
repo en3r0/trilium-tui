@@ -150,6 +150,9 @@ pub struct TabState {
     pub hist_idx: usize,
 }
 
+/// how long a scrollbar stays after the last scroll
+const SCROLLBAR_SHOWN: std::time::Duration = std::time::Duration::from_secs(3);
+
 pub struct App {
     pub db: Db,
     pub model: Model,
@@ -202,6 +205,9 @@ pub struct App {
     pub tree_hidden: bool,
     /// zen mode (Z / F11): only the note text is drawn; Esc leaves it
     pub zen: bool,
+    /// scrollbar auto-hide: what was last drawn scrolled (context, position) and when it last moved
+    sb_pos: std::cell::RefCell<(String, usize)>,
+    sb_moved: std::cell::Cell<Option<Instant>>,
     /// sidebar width set with < and >; None = 30% of the window (24 to 48 columns)
     pub tree_width: Option<u16>,
     pub help_scroll: std::cell::Cell<usize>,
@@ -228,7 +234,7 @@ impl App {
             db, model, keymap: Keymap::load(), rows: vec![], sel: 0, tree_scroll: 0,
             expanded: HashSet::new(), show_archived: false, hoisted: ROOT.into(), focus: Focus::Tree,
             overlay: Overlay::None, history: vec![], hist_idx: 0, view: None, status: String::new(),
-            sync: SyncState::Off, sync_since: Instant::now(), sync_last_ok: None, sync_changed: None, sync_dirty: Default::default(), sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), rich: None, new_attachments: vec![], imgs: Default::default(), persist_settings: false, style: Default::default(), tree_hidden: false, zen: false, tree_width: None, help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
+            sync: SyncState::Off, sync_since: Instant::now(), sync_last_ok: None, sync_changed: None, sync_dirty: Default::default(), sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), rich: None, new_attachments: vec![], imgs: Default::default(), persist_settings: false, style: Default::default(), tree_hidden: false, zen: false, sb_pos: Default::default(), sb_moved: Default::default(), tree_width: None, help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
         };
         app.expanded = app.model.children.values().flatten().filter(|b| b.expanded).map(|b| b.id.clone()).collect();
         app.rebuild_rows();
@@ -567,6 +573,20 @@ impl App {
         let current = if self.tree_area.width > 0 { i32::from(self.tree_area.width) } else { i32::from(self.tree_width.unwrap_or(30)) };
         self.tree_hidden = false;
         self.tree_width = Some((current + delta).clamp(16, 120) as u16);
+    }
+
+    /// Scrollbars appear while a view scrolls and fade a few seconds after it stops. `ctx` names the
+    /// view (a different one starts hidden); call once per frame with its current position.
+    pub fn scrollbar_visible(&self, ctx: &str, pos: usize) -> bool {
+        let mut seen = self.sb_pos.borrow_mut();
+        if seen.0 != ctx {
+            *seen = (ctx.to_string(), pos);
+            self.sb_moved.set(None);
+        } else if seen.1 != pos {
+            seen.1 = pos;
+            self.sb_moved.set(Some(Instant::now()));
+        }
+        self.sb_moved.get().is_some_and(|t| t.elapsed() < SCROLLBAR_SHOWN)
     }
 
     pub fn toggle_zen(&mut self) {
@@ -1226,6 +1246,18 @@ mod tests {
         t.draw(|f| crate::ui::draw(f, app)).unwrap();
         let buf = t.backend().buffer().clone();
         (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn scrollbar_shows_while_scrolling_and_fades_after() {
+        let (_d, app, _ids) = fixture();
+        assert!(!app.scrollbar_visible("a", 0), "a view starts without its bar");
+        assert!(!app.scrollbar_visible("a", 0));
+        assert!(app.scrollbar_visible("a", 3), "scrolling shows it");
+        assert!(app.scrollbar_visible("a", 3));
+        app.sb_moved.set(Some(Instant::now() - SCROLLBAR_SHOWN));
+        assert!(!app.scrollbar_visible("a", 3), "and it fades once the view rests");
+        assert!(!app.scrollbar_visible("b", 5), "another view starts hidden too");
     }
 
     #[test]
