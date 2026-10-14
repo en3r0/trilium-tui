@@ -82,17 +82,21 @@ fn main() -> Result<()> {
     }
 
     // `--today` waits (inside open_today) for the first sync when the day note doesn't exist yet
+    let default_hook = std::panic::take_hook(); // std's message printer, before ratatui wraps it
     let mut terminal = ratatui::init();
     if today { app.open_today(); }
     {
-        // ratatui's panic hook leaves the alternate screen but not mouse/paste/keyboard modes
-        let prev = std::panic::take_hook();
+        // Replaces ratatui's hook: it leaves the alternate screen but not mouse/paste/keyboard modes, and its
+        // restore() uses eprintln!, which panics once the terminal is gone (closed window, SIGHUP); a panic
+        // inside a panic hook aborts the process and dumps core. Everything here ignores write errors.
+        let _ = std::panic::take_hook();
         let main_thread = std::thread::current().id();
         std::panic::set_hook(Box::new(move |info| {
             // worker threads (sync, indexer) must not tear down a terminal the UI is still using
             if std::thread::current().id() != main_thread { let _ = info; return; }
             let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, PopKeyboardEnhancementFlags);
-            prev(info);
+            let _ = ratatui::try_restore();
+            default_hook(info);
         }));
     }
     let enhanced = supports_keyboard_enhancement().unwrap_or(false);
@@ -116,15 +120,21 @@ fn main() -> Result<()> {
     images::cleanup_temp();
     let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     if enhanced { let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags); }
-    ratatui::restore();
-    result
+    let _ = ratatui::try_restore();
+    if let Err(e) = result {
+        // not `return Err(e)`: the runtime reports that with eprintln!, which panics when stderr is a dead terminal
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "Error: {e:?}");
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 /// Leave the alternate screen so a full-screen editor can own the terminal.
 fn suspend(_t: &mut ratatui::DefaultTerminal) {
     let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     if ENHANCED.load(std::sync::atomic::Ordering::Relaxed) { let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags); }
-    ratatui::restore();
+    let _ = ratatui::try_restore();
 }
 
 fn resume(t: &mut ratatui::DefaultTerminal) -> Result<()> {
