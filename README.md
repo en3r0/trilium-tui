@@ -79,12 +79,24 @@ Keys follow the Trilium web app wherever a terminal allows. Rebind them in `~/.c
 
 ## A look around
 
-| | |
-|---|---|
-| ![Reading a note](docs/media/garden.png) **Read.** Notes are rendered for the terminal: lists, tables, to-do items, quotes, images. | ![Editing in place](docs/media/edit.png) **Edit in place.** Formatted text, no tags, with a hint bar for the keys. |
-| ![Code note with syntax highlighting](docs/media/code.png) **Code notes** are highlighted in your terminal's own palette (it follows the Omarchy theme). | ![Search](docs/media/search.png) **Search** with Trilium's query syntax, results with their path. |
-| ![Command palette](docs/media/palette.png) **Command palette** for everything else: import, export, sync, protect, journal. | ![Zen mode](docs/media/zen.png) **Zen mode** hides all chrome and centres the text. |
-| ![A picture inside a note](docs/media/picture.png) **Pictures** are attached with `Alt+P` and shown inline (sixel, kitty or iTerm2 graphics where the terminal supports them, half-blocks elsewhere). | ![The note's source in nvim](docs/media/source.png) **Source editing** with `Shift+E` opens the stored HTML in your `$EDITOR`; saving it updates the note. |
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/media/garden.png" alt="Read." width="100%"><br><b>Read.</b> Notes are rendered for the terminal: lists, tables, to-do items, quotes, images.</td>
+    <td width="50%" valign="top"><img src="docs/media/edit.png" alt="Edit in place." width="100%"><br><b>Edit in place.</b> Formatted text, no tags, with a hint bar for the keys.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/media/code.png" alt="Code notes" width="100%"><br><b>Code notes</b> are highlighted in your terminal's own palette (it follows the Omarchy theme).</td>
+    <td width="50%" valign="top"><img src="docs/media/search.png" alt="Search" width="100%"><br><b>Search</b> with Trilium's query syntax, results with their path.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/media/palette.png" alt="Command palette" width="100%"><br><b>Command palette</b> for everything else: import, export, sync, protect, journal.</td>
+    <td width="50%" valign="top"><img src="docs/media/zen.png" alt="Zen mode" width="100%"><br><b>Zen mode</b> hides all chrome and centres the text.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/media/picture.png" alt="Pictures" width="100%"><br><b>Pictures</b> are attached with <code>Alt+P</code> and shown inline (sixel, kitty or iTerm2 graphics where the terminal supports them, half-blocks elsewhere).</td>
+    <td width="50%" valign="top"><img src="docs/media/source.png" alt="Source editing" width="100%"><br><b>Source editing</b> with <code>Shift+E</code> opens the stored HTML in your <code>$EDITOR</code>; saving it updates the note.</td>
+  </tr>
+</table>
 
 (Demo screenshots use a made-up notebook, not real data. The cat photo is ["Tabby cat with blue eyes"](https://commons.wikimedia.org/wiki/File:Tabby_cat_with_blue_eyes-3336579.jpg) from Wikimedia Commons, released under CC0 and cropped.)
 
