@@ -1,6 +1,6 @@
 # trilium-tui
 
-**Your Trilium Next notes, in the terminal. Fast, offline-first, and it syncs with your server.**
+**Your [Trilium Next](https://github.com/TriliumNext/Trilium) notes, in the terminal. Fast, offline-first, and it syncs with your server.**
 
 <p align="center">
   <img src="docs/media/demo.gif" alt="trilium-tui demo: browsing notes, editing in place, search, command palette" width="800">
