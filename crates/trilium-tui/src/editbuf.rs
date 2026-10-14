@@ -38,6 +38,8 @@ impl EditBuf {
     }
 
     pub fn text(&self) -> String { self.lines.join("\n") }
+    /// The text the database holds, when the buffer was opened with edits that are not stored yet.
+    pub fn set_stored(&mut self, stored: &str) { self.original = stored.to_string(); self.dirty = true; }
     pub fn mark_saved(&mut self) { self.original = self.text(); self.dirty = false; }
     /// Cheap unless something was edited: compares line by line without building the whole text.
     pub fn changed(&self) -> bool {

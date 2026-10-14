@@ -512,8 +512,30 @@ impl App {
         }
     }
 
-    /// Open the built-in editor on the note's stored source.
+    /// Edit the note in place (text notes); anything else, or markup that would not round-trip, opens the source editor instead.
     pub fn request_edit(&mut self) {
+        let Some(id) = self.editable_id() else { return };
+        if let Err(e) = self.db.ensure_writable() { self.status = format!("{e:#}"); return; }
+        let Some(n) = self.model.notes.get(&id) else { return };
+        if n.ntype != "text" { self.request_edit_source(); return; }
+        let title = n.title.clone();
+        let content = match self.db.note_content(&id) { Ok(c) => c.unwrap_or_default(), Err(e) => { self.fail("open for editing", e); return; } };
+        if let Some(why) = trilium_core::richtext::unsupported_reason(&content) {
+            self.request_edit_source();
+            if matches!(self.overlay, Overlay::Edit(_)) { self.status = format!("opened the HTML source editor: {why}"); }
+            return;
+        }
+        match crate::rich_view::RichSession::new(&id, &title, &content) {
+            Some(r) => { self.rich = Some(Box::new(r)); self.focus = Focus::Note; }
+            None => {
+                self.request_edit_source();
+                if matches!(self.overlay, Overlay::Edit(_)) { self.status = "opened the HTML source editor: this note has no plain text to edit in place".into(); }
+            }
+        }
+    }
+
+    /// Open the built-in source editor on the note's stored text.
+    pub fn request_edit_source(&mut self) {
         let Some(id) = self.editable_id() else { return };
         if let Err(e) = self.db.ensure_writable() { self.status = format!("{e:#}"); return; }
         let Some(n) = self.model.notes.get(&id) else { return };
@@ -563,6 +585,9 @@ impl App {
         if let Overlay::Edit(s) = &self.overlay {
             if s.buf.changed() { let (id, text) = (s.note_id.clone(), s.buf.text()); self.save_recovery(&id, &text); }
         }
+        if let Some(r) = &self.rich {
+            if r.dirty() { let (id, text) = (r.note_id.clone(), r.html()); self.save_recovery(&id, &text); }
+        }
     }
 
     pub fn edit_key(&mut self, ev: KeyEvent) {
@@ -571,8 +596,24 @@ impl App {
         let out = s.key(ev);
         let id = s.note_id.clone();
         let text = if matches!(out, Outcome::Save | Outcome::SaveAndClose) { s.buf.text() } else { String::new() };
+        if out == Outcome::ToRich {
+            let Overlay::Edit(s) = &mut self.overlay else { return };
+            let text = s.buf.text();
+            if let Some(why) = trilium_core::richtext::unsupported_reason(&text) { s.msg = format!("can't edit this in place: {why}"); return; }
+            let (title, base) = (s.title.clone(), s.base.clone());
+            match crate::rich_view::RichSession::new(&id, &title, &text) {
+                Some(mut r) => {
+                    r.base = base.clone();
+                    if text != base { r.mark_dirty(); }
+                    self.overlay = Overlay::None;
+                    self.rich = Some(Box::new(r));
+                }
+                None => s.msg = "no plain text in this note to edit in place".into(),
+            }
+            return;
+        }
         match out {
-            Outcome::None => {}
+            Outcome::None | Outcome::ToRich => {}
             Outcome::Close => self.overlay = Overlay::None,
             Outcome::Save | Outcome::SaveAndClose => {
                 let stored = self.db.note_content(&id).ok().flatten().unwrap_or_default();
@@ -598,7 +639,54 @@ impl App {
         }
     }
 
+    /// Keys while the note pane is being edited in place.
+    pub fn rich_key(&mut self, ev: KeyEvent) {
+        use crate::rich_view::Outcome;
+        let Some(mut r) = self.rich.take() else { return };
+        let out = r.key(ev);
+        let id = r.note_id.clone();
+        match out {
+            Outcome::None => { self.rich = Some(r); }
+            Outcome::Close => { self.status.clear(); }
+            Outcome::ToSource => {
+                // carry unsaved edits over to the source editor
+                let text = r.html();
+                let dirty = r.dirty() || text != r.base;
+                let n = self.model.notes.get(&id);
+                let (title, mime) = (r.title.clone(), n.map(|n| if n.ntype == "text" { "text/html".to_string() } else { n.mime.clone() }).unwrap_or_else(|| "text/html".into()));
+                let mut s = crate::edit_view::EditSession::new(&id, &title, &mime, &text);
+                s.base = r.base.clone();
+                if dirty { s.buf.set_stored(&r.base); }
+                self.overlay = Overlay::Edit(Box::new(s));
+            }
+            Outcome::Save | Outcome::SaveAndClose => {
+                let text = r.html();
+                let stored = self.db.note_content(&id).ok().flatten().unwrap_or_default();
+                if r.needs_overwrite_confirmation(&stored) { self.rich = Some(r); return; }
+                let unchanged = stored == text;
+                let res = if unchanged { Ok(()) } else { self.db.set_note_content(&id, &text) };
+                match res {
+                    Ok(()) => {
+                        if !unchanged { self.changed(Some(&id)); }
+                        if out == Outcome::SaveAndClose { self.status = "saved".into(); }
+                        else {
+                            let stored = self.db.note_content(&id).ok().flatten().unwrap_or(text);
+                            r.saved(stored);
+                            self.rich = Some(r);
+                        }
+                    }
+                    Err(e) => {
+                        r.msg = format!("save failed: {e:#}");
+                        self.rich = Some(r);
+                        self.fail("save", e)
+                    }
+                }
+            }
+        }
+    }
+
     pub fn handle_paste(&mut self, text: &str) {
+        if let (Some(r), Overlay::None) = (self.rich.as_mut(), &self.overlay) { r.paste(text); return; }
         match &mut self.overlay {
             Overlay::Edit(s) => s.paste(text),
             Overlay::Prompt(p) => { for c in text.lines().next().unwrap_or("").chars() { p.text.insert(p.cursor, c); p.cursor += 1; } }
@@ -692,6 +780,11 @@ impl App {
 
     pub fn lock_protected(&mut self, msg: &str) {
         if !self.db.is_unlocked() { return; }
+        // an in-place edit of a protected note cannot be saved once locked: keep its text (encrypted) and close it
+        if self.rich.as_ref().is_some_and(|r| self.model.notes.get(&r.note_id).is_some_and(|n| n.protected)) {
+            self.save_unsaved_on_exit();
+            self.rich = None;
+        }
         // everything that holds decrypted text goes: overlays built from it, and the views of other tabs
         if matches!(self.overlay, Overlay::Panel(_) | Overlay::Image(_) | Overlay::Picker(_) | Overlay::Prompt(_) | Overlay::Confirm(_)) { self.overlay = Overlay::None; }
         self.panel_return = None;
@@ -711,7 +804,7 @@ impl App {
 
     /// Lock after `protectedSessionTimeout` seconds without input (never while the built-in editor holds text).
     pub fn check_autolock(&mut self) {
-        if !self.db.is_unlocked() || matches!(self.overlay, Overlay::Edit(_)) { return; }
+        if !self.db.is_unlocked() || matches!(self.overlay, Overlay::Edit(_)) || self.rich.is_some() { return; }
         let secs = self.db.protected_session_timeout();
         if secs > 0 && self.last_input.elapsed().as_secs() >= secs { self.lock_protected("protected notes locked after inactivity"); }
     }

@@ -10,6 +10,7 @@ mod images;
 mod keymap;
 mod panel;
 mod render;
+mod rich_view;
 mod sync;
 mod tabs;
 mod ui;

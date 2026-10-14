@@ -176,6 +176,8 @@ pub struct App {
     /// what the note held when it was handed to the external editor
     pub edit_base: Option<String>,
     pub edit_area: Rect,
+    /// the in-place editor, when the note pane is being edited
+    pub rich: Option<Box<crate::rich_view::RichSession>>,
     pub help_scroll: std::cell::Cell<usize>,
     /// Inactive tabs live here; the active tab's state is in `view`/`history`/`hist_idx`.
     pub tabs: Vec<TabState>,
@@ -200,7 +202,7 @@ impl App {
             db, model, keymap: Keymap::load(), rows: vec![], sel: 0, tree_scroll: 0,
             expanded: HashSet::new(), show_archived: false, hoisted: ROOT.into(), focus: Focus::Tree,
             overlay: Overlay::None, history: vec![], hist_idx: 0, view: None, status: String::new(),
-            sync: SyncState::Off, sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
+            sync: SyncState::Off, sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), rich: None, help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
         };
         app.expanded = app.model.children.values().flatten().filter(|b| b.expanded).map(|b| b.id.clone()).collect();
         app.rebuild_rows();
@@ -697,6 +699,11 @@ impl App {
             self.edit_key(ev);
             return;
         }
+        if self.rich.is_some() && matches!(self.overlay, Overlay::None) {
+            if ev.code == KeyCode::F(1) { self.overlay = Overlay::Help; return; }
+            self.rich_key(ev);
+            return;
+        }
         if matches!(self.overlay, Overlay::Picker(_)) {
             self.picker_key(ev);
             return;
@@ -738,7 +745,7 @@ impl App {
             (KeyCode::Char('b'), false) if self.focus == Focus::Tree => { self.open_panel(crate::panel::PanelTab::Backlinks); return; }
             (KeyCode::Char('v'), false) if self.focus == Focus::Tree => { self.open_panel(crate::panel::PanelTab::Revisions); return; }
             (KeyCode::Char('e'), false) if self.focus == Focus::Note => { self.request_edit(); return; }
-            (KeyCode::Char('e'), true) => { self.request_edit(); return; }
+            (KeyCode::Char('e'), true) => { self.request_edit_source(); return; }
             (KeyCode::Char('E'), _) => { self.request_edit_external(); return; }
             (KeyCode::Tab, false) | (KeyCode::BackTab, _) => {
                 self.focus = if self.focus == Focus::Tree { Focus::Note } else { Focus::Tree };
@@ -754,6 +761,10 @@ impl App {
 
     pub fn handle_mouse(&mut self, ev: MouseEvent) {
         self.last_input = Instant::now();
+        if let (Some(r), Overlay::None) = (self.rich.as_mut(), &self.overlay) {
+            r.mouse(ev);
+            return;
+        }
         if let Overlay::Edit(s) = &mut self.overlay {
             let ta = crate::edit_view::text_area(self.edit_area);
             match ev.kind {
@@ -881,6 +892,7 @@ impl App {
             Action::ToggleSource => self.toggle_source(),
             Action::OpenInBrowser => self.open_in_browser(),
             Action::EditContent => self.request_edit(),
+            Action::EditSource => self.request_edit_source(),
             Action::EditExternal => self.request_edit_external(),
             Action::Quit => self.quit = true,
             Action::OpenToday => self.open_today(),
@@ -991,7 +1003,7 @@ mod tests {
         app.open_note(&alpha, false, false);
         assert!(matches!(app.view.as_ref().unwrap().kind, Kind::Protected));
         app.run_action(Action::EditContent);
-        assert!(!matches!(app.overlay, Overlay::Edit(_)));
+        assert!(!matches!(app.overlay, Overlay::Edit(_)) && app.rich.is_none());
         let shown = screen(&mut app, 100, 30);
         assert!(!shown.contains("alpha body") && shown.contains("locked"), "{shown}");
         // wrong password, then the right one
@@ -1007,10 +1019,29 @@ mod tests {
         // the external editor is refused (plaintext temp file), the built-in one works
         app.run_action(Action::EditExternal);
         assert!(app.pending_edit.is_none() && app.status.contains("built-in"), "{}", app.status);
-        app.run_action(Action::EditContent);
+        app.run_action(Action::EditSource);
         assert!(matches!(app.overlay, Overlay::Edit(_)));
         app.handle_key(key(KeyCode::Esc));
         app.overlay = Overlay::None;
+        app.run_action(Action::EditContent);
+        assert!(app.rich.is_some(), "protected notes edit in place too once unlocked");
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.rich.is_none());
+        // locking while an in-place edit holds unsaved text keeps that text, encrypted, and closes the editor
+        app.run_action(Action::EditContent);
+        app.handle_key(key(KeyCode::Char('Z')));
+        app.check_autolock();
+        assert!(app.rich.is_some(), "no auto-lock while an editor holds text");
+        app.run_action(Action::LockProtected);
+        assert!(app.rich.is_none());
+        let lost = app.db.conn.path().map(std::path::PathBuf::from).unwrap().parent().unwrap().join("lost-edits");
+        let kept: Vec<_> = std::fs::read_dir(&lost).unwrap().flatten().collect();
+        assert!(kept.len() == 1 && kept[0].path().extension().is_some_and(|e| e == "enc"), "{kept:?}");
+        assert!(!std::fs::read_to_string(kept[0].path()).unwrap().contains("alpha body"), "the recovery file must not hold plaintext");
+        app.run_action(Action::UnlockProtected);
+        typed(&mut app, "s3cret");
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.db.is_unlocked());
         // locking closes everything built from decrypted text: panels, and the views of other tabs
         app.run_action(Action::ShowRevisions);
         assert!(matches!(app.overlay, Overlay::Panel(_)));
@@ -2004,7 +2035,7 @@ mod tests {
         app.db.set_note_content(&ids[0], "<p>one</p>\r\n<p>two</p>").unwrap();
         app.reload(); app.reveal(&ids[0]);
         app.focus = Focus::Note;
-        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
         assert!(matches!(app.overlay, Overlay::Edit(_)));
         app.handle_key(key(KeyCode::End));
         app.handle_key(key(KeyCode::Char('!')));
@@ -2016,7 +2047,7 @@ mod tests {
         app.handle_key(key(KeyCode::Esc));
         assert!(matches!(app.overlay, Overlay::None));
         // dirty buffer: discard leaves the note alone
-        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('Z')));
         app.handle_key(key(KeyCode::Esc));
         assert!(matches!(app.overlay, Overlay::Edit(_)));
@@ -2024,7 +2055,7 @@ mod tests {
         assert!(matches!(app.overlay, Overlay::None));
         assert_eq!(app.db.note_content(&ids[0]).unwrap().unwrap(), "<p>one</p>!\r\n<p>two</p>");
         // paste goes into the editor, newlines intact
-        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
         app.handle_paste("x\ny");
         let Overlay::Edit(s) = &app.overlay else { panic!() };
         assert!(s.buf.text().starts_with("x\r\ny<p>one"));
@@ -2057,7 +2088,7 @@ mod tests {
         app.db.set_note_content(&ids[0], "<p>mine</p>").unwrap();
         app.reload(); app.reveal(&ids[0]);
         app.focus = Focus::Note;
-        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('!')));
         app.db.set_note_content(&ids[0], "<p>from sync</p>").unwrap();
         let save = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
@@ -2113,4 +2144,107 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.status, "nothing to add");
     }
+
+    #[test]
+    fn e_edits_in_place_and_saves_only_what_changed() {
+        let (_d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<h2>Head</h2>\r\n<p>one <a href=\"http://x\">link</a></p><table><tr><td>cell</td></tr></table>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        assert!(app.rich.is_some() && matches!(app.overlay, Overlay::None), "e edits in place");
+        let shown = screen(&mut app, 100, 30);
+        assert!(shown.contains("Head") && shown.contains("one link") && shown.contains("cell") && !shown.contains("<h2>") && !shown.contains("href"), "{shown}");
+        // an untouched session writes nothing
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(app.db.note_content(&ids[0]).unwrap().unwrap(), "<h2>Head</h2>\r\n<p>one <a href=\"http://x\">link</a></p><table><tr><td>cell</td></tr></table>");
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Char('X')));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(app.db.note_content(&ids[0]).unwrap().unwrap(), "<h2>Head</h2>\r\n<p>Xone <a href=\"http://x\">link</a></p><table><tr><td>cell</td></tr></table>", "only the touched text changed");
+        assert!(app.rich.is_some(), "Ctrl+S keeps editing");
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.rich.is_none(), "clean editor closes at once");
+        assert!(screen(&mut app, 100, 30).contains("Xone link"), "the pane shows the saved note again");
+    }
+
+    #[test]
+    fn f2_carries_unsaved_edits_between_in_place_and_source_editing() {
+        let (_d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<p>one</p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(key(KeyCode::End));
+        app.handle_key(key(KeyCode::Char('!')));
+        app.handle_key(key(KeyCode::F(2)));
+        assert!(app.rich.is_none());
+        let Overlay::Edit(s) = &app.overlay else { panic!("source editor expected") };
+        assert_eq!(s.buf.text(), "<p>one!</p>");
+        assert!(s.buf.changed(), "the carried edit still counts as unsaved");
+        // break the markup in the source editor: it refuses to go back in place until it is fixed
+        app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+        for c in "<b>".chars() { app.handle_key(key(KeyCode::Char(c))); }
+        app.handle_key(key(KeyCode::F(2)));
+        assert!(app.rich.is_none() && matches!(app.overlay, Overlay::Edit(_)), "markup that would not round-trip stays in the source editor");
+        for _ in 0..3 { app.handle_key(key(KeyCode::Backspace)); }
+        app.handle_key(key(KeyCode::F(2)));
+        assert!(app.rich.is_some() && matches!(app.overlay, Overlay::None));
+        assert_eq!(app.rich.as_ref().unwrap().html(), "<p>one!</p>");
+        assert!(app.rich.as_ref().unwrap().dirty());
+        // nothing was stored by switching
+        assert_eq!(app.db.note_content(&ids[0]).unwrap().unwrap(), "<p>one</p>");
+    }
+
+    #[test]
+    fn notes_that_cannot_be_edited_in_place_fall_back_to_the_source_editor_with_a_reason() {
+        let (_d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<p>a</p><!-- keep me --><p>b</p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        assert!(app.rich.is_none() && matches!(app.overlay, Overlay::Edit(_)));
+        assert!(app.status.contains("source editor") && app.status.contains("comments"), "{}", app.status);
+    }
+
+    #[test]
+    fn in_place_editor_asks_before_discarding_and_guards_against_changes_underneath() {
+        let (_d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<p>mine</p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(key(KeyCode::Char('!')));
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.rich.is_some(), "dirty: asks first");
+        app.handle_key(key(KeyCode::Char('x')));
+        assert!(app.rich.is_some(), "any other key keeps editing");
+        app.db.set_note_content(&ids[0], "<p>from sync</p>").unwrap();
+        let save = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        app.handle_key(save);
+        assert_eq!(app.db.note_content(&ids[0]).unwrap().unwrap(), "<p>from sync</p>", "first Ctrl+S only warns");
+        app.handle_key(save);
+        assert_eq!(app.db.note_content(&ids[0]).unwrap().unwrap(), "<p>!mine</p>");
+        app.handle_key(key(KeyCode::Char('?')));
+        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Char('d')));
+        assert!(app.rich.is_none());
+        assert_eq!(app.db.note_content(&ids[0]).unwrap().unwrap(), "<p>!mine</p>", "discard leaves the stored note alone");
+    }
+
+    #[test]
+    fn unsaved_in_place_text_is_kept_when_the_app_is_killed() {
+        let (d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<p>mine</p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(key(KeyCode::Char('!')));
+        app.save_unsaved_on_exit();
+        let dir = d.path().join("lost-edits");
+        let kept: Vec<_> = std::fs::read_dir(&dir).map(|r| r.flatten().collect()).unwrap_or_default();
+        assert_eq!(kept.len(), 1, "one recovery file in {dir:?}");
+        assert_eq!(std::fs::read_to_string(kept[0].path()).unwrap(), "!<p>mine</p>".replace("!<p>mine</p>", "<p>!mine</p>"));
+    }
+
 }

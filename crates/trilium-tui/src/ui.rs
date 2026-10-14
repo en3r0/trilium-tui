@@ -71,13 +71,18 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn build_html(app: &App, width: usize) -> render::Rendered {
-    let v = app.view.as_ref().unwrap();
-    let resolver = |id: &str| -> Option<(String, String)> {
+/// Looks up an included note's title and HTML for embedding in a rendered view.
+fn include_resolver(app: &App) -> impl Fn(&str) -> Option<(String, String)> + '_ {
+    move |id: &str| {
         let n = app.model.notes.get(id)?;
         if n.ntype != "text" { return None; } // a locked protected note yields no content below
         Some((n.title.clone(), app.db.note_content(id).ok().flatten()?))
-    };
+    }
+}
+
+fn build_html(app: &App, width: usize) -> render::Rendered {
+    let v = app.view.as_ref().unwrap();
+    let resolver = include_resolver(app);
     if matches!(v.kind, Kind::Code) {
         let html = render::markdown_to_html(&v.content, &|id| app.model.notes.get(id).map(|n| n.title.clone()));
         return render::render_html_full(&html, width, &resolver);
@@ -140,8 +145,17 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
         }
         _ => (String::new(), String::new()),
     };
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(focus_style(focused))
-        .title(Line::from(vec![Span::raw(format!(" {title} ")), Span::styled(format!("[{badge}] "), Style::default().fg(Color::DarkGray))]));
+    let editing = app.rich.as_ref().filter(|_| matches!(app.overlay, Overlay::None) || matches!(app.overlay, Overlay::Help));
+    let block = match editing {
+        Some(r) => {
+            let accent = Style::default().fg(Color::Cyan);
+            let modified = if r.dirty() { Span::styled(" ● ", Style::default().fg(Color::Yellow)) } else { Span::raw(" ") };
+            Block::bordered().border_type(BorderType::Rounded).border_style(accent)
+                .title(Line::from(vec![Span::styled(" ✎ ", accent), Span::styled(r.title.clone(), Style::default().add_modifier(Modifier::BOLD)), modified]))
+        }
+        None => Block::bordered().border_type(BorderType::Rounded).border_style(focus_style(focused))
+            .title(Line::from(vec![Span::raw(format!(" {title} ")), Span::styled(format!("[{badge}] "), Style::default().fg(Color::DarkGray))])),
+    };
     let inner = block.inner(area);
     f.render_widget(block, area);
     let has_attrs = app.view.as_ref().is_some_and(|v| !v.attrs.is_empty());
@@ -149,6 +163,14 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
     let content_r = Rect { x: content_r.x + 1, width: content_r.width.saturating_sub(2), ..content_r };
     app.note_height = content_r.height as usize;
     let width = content_r.width as usize;
+    if app.rich.is_some() && matches!(app.overlay, Overlay::None | Overlay::Help) {
+        if let Some(mut r) = app.rich.take() {
+            r.draw(f, content_r, &include_resolver(app));
+            app.rich = Some(r);
+        }
+        draw_attr_strip(f, app, attr_r);
+        return;
+    }
     if app.view.as_ref().is_some_and(|v| matches!(v.kind, Kind::Image)) {
         app.ensure_note_picture();
         if let Some(pic) = app.view.as_mut().and_then(|v| v.picture.as_deref_mut()) { draw_picture(f, pic, content_r, true); }
@@ -401,9 +423,14 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
         row(format!("{} / {}", km(Action::CloneTo), km(Action::MoveTo)), "clone / move marked notes to a note you pick"),
         row(km(Action::MoveOut) + " / " + &km(Action::MoveIn), "move out of / into previous sibling (tree)"),
         row(km(Action::AddLabel) + " / " + &km(Action::AddRelation), "add label / relation"),
-        row("e".into(), "edit the stored source in the built-in editor (lossless)"),
+        row("e".into(), "edit the note in place (formatted, no tags); other notes open the source editor"),
+        row("Ctrl+e".into(), "edit the stored HTML/Markdown/code source in the built-in editor (lossless)"),
         row("E".into(), "edit it in $VISUAL / $EDITOR instead"),
-        row("(editor)".into(), "^S save · Esc close · ^F find · F3 next · ^G line · ^Z/^Y undo · ^K cut line · ^D dup line"),
+        row("(in place)".into(), "^S save · Esc close · ^Z/^Y undo · ^B bold · ^U underline · Alt+I (or ^I) italic · Alt+S strike · Alt+C code · Alt+H mark"),
+        row("(in place)".into(), "^K link · ^F find · F3 next · Alt+1..6 heading · Alt+0 paragraph · Alt+U/O/T bullet/numbered/to-do list · Alt+Q quote"),
+        row("(in place)".into(), "Tab / Shift+Tab nest / unnest list item · Ctrl+Space or click toggles a to-do · Shift/Alt+Enter line break · F2 HTML source"),
+        row("(in place)".into(), "type `- `, `1. `, `# `, `> `, `[ ] ` at the start of a paragraph to start a list, heading, quote or to-do"),
+        row("(source)".into(), "^S save · Esc close · ^F find · F3 next · ^G line · ^Z/^Y undo · ^K cut line · ^D dup line · F2 edit in place (HTML notes)"),
         Line::default(),
         h("Tree"),
         row("↑ ↓  k j".into(), "move"),

@@ -36,9 +36,9 @@ pub struct EditSession {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Outcome { None, Save, Close, SaveAndClose }
+pub enum Outcome { None, Save, Close, SaveAndClose, ToRich }
 
-fn system_copy(text: &str) {
+pub(crate) fn system_copy(text: &str) {
     for (prog, args) in [("wl-copy", &[][..]), ("xclip", &["-selection", "clipboard"][..])] {
         if let Ok(mut c) = std::process::Command::new(prog).args(args).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
             if let Some(mut si) = c.stdin.take() { let _ = si.write_all(text.as_bytes()); }
@@ -49,7 +49,7 @@ fn system_copy(text: &str) {
     }
 }
 
-fn system_paste() -> Option<String> {
+pub(crate) fn system_paste() -> Option<String> {
     for (prog, args) in [("wl-paste", &["-n"][..]), ("xclip", &["-selection", "clipboard", "-o"][..])] {
         if let Ok(o) = std::process::Command::new(prog).args(args).stderr(std::process::Stdio::null()).output() {
             if o.status.success() { return String::from_utf8(o.stdout).ok(); }
@@ -138,6 +138,7 @@ impl EditSession {
             (KeyCode::Char('f'), true) => { self.mode = Mode::Find; self.input = self.buf.selected_text().filter(|s| !s.contains('\n')).unwrap_or_else(|| self.last_find.clone()); }
             (KeyCode::Char('g'), true) => { self.mode = Mode::Goto; self.input.clear(); }
             (KeyCode::F(3), _) => self.find(),
+            (KeyCode::F(2), _) if self.mime == "text/html" => return Outcome::ToRich,
             (KeyCode::Char('k'), true) => b.delete_line(),
             (KeyCode::Char('d'), true) => b.duplicate_line(),
             (KeyCode::Char('w'), true) | (KeyCode::Backspace, true) => b.delete_word_back(),
@@ -297,7 +298,7 @@ pub fn draw(f: &mut Frame, s: &mut EditSession, area: Rect) {
         Mode::Goto => Line::from(vec![Span::styled(" Go to line: ", accent), Span::raw(s.input.clone()), Span::styled("▏", accent)]),
         Mode::ConfirmClose => Line::from(Span::styled(" Unsaved changes — y save & close · d discard · any other key keeps editing", Style::default().fg(Color::Yellow))),
         Mode::Edit if !s.msg.is_empty() => Line::from(vec![Span::styled(format!(" {}", s.msg), accent)]),
-        Mode::Edit => Line::from(vec![Span::styled(format!(" {pos}  "), dim), Span::styled("^S", accent), Span::styled(" save  ", dim), Span::styled("Esc", accent), Span::styled(" close  ", dim), Span::styled("^F", accent), Span::styled(" find  ", dim), Span::styled("^G", accent), Span::styled(" line  ", dim), Span::styled("^Z", accent), Span::styled(" undo  ", dim), Span::styled("^K", accent), Span::styled(" cut line", dim)]),
+        Mode::Edit => Line::from(vec![Span::styled(format!(" {pos}  "), dim), Span::styled("^S", accent), Span::styled(" save  ", dim), Span::styled("Esc", accent), Span::styled(" close  ", dim), Span::styled("^F", accent), Span::styled(" find  ", dim), Span::styled("^G", accent), Span::styled(" line  ", dim), Span::styled("^Z", accent), Span::styled(" undo  ", dim), Span::styled("^K", accent), Span::styled(" cut line", dim)].into_iter().chain(if s.mime == "text/html" { vec![Span::styled("  F2", accent), Span::styled(" in-place", dim)] } else { vec![] }).collect::<Vec<Span>>()),
     };
     f.render_widget(Paragraph::new(foot), foot_r);
 

@@ -18,6 +18,7 @@ pub mod notion;
 pub mod obsidian;
 pub mod panels;
 pub mod protect;
+pub mod richtext;
 pub mod search;
 pub mod spreadsheet;
 pub mod share;
