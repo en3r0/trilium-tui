@@ -3739,7 +3739,7 @@ dependencies = [
 
 [[package]]
 name = "trilium-cli"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3753,7 +3753,7 @@ dependencies = [
 
 [[package]]
 name = "trilium-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -3785,7 +3785,7 @@ dependencies = [
 
 [[package]]
 name = "trilium-tui"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
