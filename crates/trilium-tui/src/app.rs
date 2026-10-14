@@ -572,7 +572,9 @@ impl App {
     pub fn resize_sidebar(&mut self, delta: i32) {
         let current = if self.tree_area.width > 0 { i32::from(self.tree_area.width) } else { i32::from(self.tree_width.unwrap_or(30)) };
         self.tree_hidden = false;
-        self.tree_width = Some((current + delta).clamp(16, 120) as u16);
+        let width = (current + delta).clamp(16, 120) as u16;
+        self.tree_width = Some(width);
+        if self.persist_settings { if let Some(p) = crate::config::config_path() { let _ = crate::config::save_setting_to(&p, "sidebarWidth", width.into()); } }
     }
 
     /// Scrollbars appear while a view scrolls and fade a few seconds after it stops. `ctx` names the

@@ -12,6 +12,8 @@ pub struct Config {
     pub inline_images: bool,
     /// Pane look: "top" (default: a line across the top of each pane plus one divider), "flat" (header + one divider), "filled" (darker tree panel, no lines) or "boxed" (square borders).
     pub pane_style: Option<String>,
+    /// Sidebar width in columns, set with < and >; unset = 30% of the window.
+    pub sidebar_width: Option<u16>,
 }
 
 impl Config {
@@ -40,6 +42,16 @@ pub fn save_setting_to(path: &std::path::Path, key: &str, value: serde_json::Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sidebar_width_is_saved_next_to_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"paneStyle": "flat"}"#).unwrap();
+        save_setting_to(&path, "sidebarWidth", 42u16.into()).unwrap();
+        let cfg: Config = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!((cfg.sidebar_width, cfg.pane_style.as_deref()), (Some(42), Some("flat")));
+    }
 
     #[test]
     fn the_picture_switch_is_saved_without_losing_other_settings() {
