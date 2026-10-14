@@ -14,7 +14,7 @@ It ships two programs: `trilium-tui` (the interface) and `trilium-cli` (the same
 ## Why use it
 
 - **Instant.** Browse, search and edit against a local SQLite database. Sync happens in the background.
-- **Edit like a document, not like HTML.** Press `e` and edit formatted text right in the note pane: no tags on screen, bold/italic/code, lists, tables, links to other notes, pictures. Only the paragraph you touch is rewritten; the rest of the note is saved byte for byte.
+- **Edit like a document, not like HTML.** Press `e` and edit formatted text right in the note pane: no tags on screen, bold/italic/code, lists, tables, links to other notes, pictures. Only the paragraph you touch is rewritten; the rest of the note is saved byte for byte. And when you want full control, edit the stored source too: `Ctrl+e` opens it in the built-in editor, `Shift+E` in your own `$EDITOR`. Nothing in a note is out of reach.
 - **Safe with real data.** Writes copy Trilium's own bookkeeping (revisions, hashes, entity changes) and were checked against a real Trilium v0.106.0 server. A daily backup is made automatically, and unsaved text is kept in `lost-edits/` if a save ever fails.
 - **Trilium's search, unchanged.** `#label`, `~relation.title`, `note.title *=* x`, `orderBy`: the full query syntax.
 - **Bring your notes with you.** Import Obsidian, Notion, Anytype, Google Keep, Evernote and OPML. Export to Trilium ZIP, Markdown, OPML, Evernote, or a static website.
