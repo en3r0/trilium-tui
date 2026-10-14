@@ -68,6 +68,7 @@ fn main() -> Result<()> {
     }
     let mut app = App::new(&db_path, server)?;
     app.imgs.enabled = cfg.inline_images;
+    app.style = cfg.pane_style.as_deref().map(ui::PaneStyle::parse).unwrap_or_default();
     app.persist_settings = true;
     if let Ok(Some(b)) = app.db.backup_daily(&db_path, 7) { app.status = format!("backup saved: {}", b.display()); }
     let (tx, rx) = channel();

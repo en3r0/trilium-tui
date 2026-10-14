@@ -138,7 +138,10 @@ pub struct Clipboard { pub mode: ClipMode, pub items: Vec<(String, String)> }
 /// The tree list stops here: expanded clones can multiply rows per level, and a crafted import must not make every launch run out of memory.
 const MAX_TREE_ROWS: usize = 200_000;
 
-pub enum SyncState { Off, Syncing, Ok(Instant, usize), Error(String) }
+/// how long the status stays green after a sync that moved changes
+const SYNC_GREEN: std::time::Duration = std::time::Duration::from_secs(60);
+
+pub enum SyncState { Off, Syncing, Ok, Error(String) }
 
 #[derive(Default)]
 pub struct TabState {
@@ -164,6 +167,12 @@ pub struct App {
     pub view: Option<NoteView>,
     pub status: String,
     pub sync: SyncState,
+    /// when the running sync started / the last successful one finished / the last one that moved changes
+    pub sync_since: Instant,
+    pub sync_last_ok: Option<Instant>,
+    pub sync_changed: Option<Instant>,
+    /// local edits made since the last finished sync
+    pub sync_dirty: std::cell::Cell<bool>,
     pub sync_trigger: Option<Sender<()>>,
     pub server_url: Option<String>,
     pub quit: bool,
@@ -188,6 +197,11 @@ pub struct App {
     pub imgs: crate::images::InlineImages,
     /// write settings changed in the app (the picture switch) to the config file; only the real program does
     pub persist_settings: bool,
+    pub style: crate::ui::PaneStyle,
+    /// sidebar (note tree) collapsed; the note pane then fills the window
+    pub tree_hidden: bool,
+    /// sidebar width set with < and >; None = 30% of the window (24 to 48 columns)
+    pub tree_width: Option<u16>,
     pub help_scroll: std::cell::Cell<usize>,
     /// Inactive tabs live here; the active tab's state is in `view`/`history`/`hist_idx`.
     pub tabs: Vec<TabState>,
@@ -212,7 +226,7 @@ impl App {
             db, model, keymap: Keymap::load(), rows: vec![], sel: 0, tree_scroll: 0,
             expanded: HashSet::new(), show_archived: false, hoisted: ROOT.into(), focus: Focus::Tree,
             overlay: Overlay::None, history: vec![], hist_idx: 0, view: None, status: String::new(),
-            sync: SyncState::Off, sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), rich: None, new_attachments: vec![], imgs: Default::default(), persist_settings: false, help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
+            sync: SyncState::Off, sync_since: Instant::now(), sync_last_ok: None, sync_changed: None, sync_dirty: Default::default(), sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), rich: None, new_attachments: vec![], imgs: Default::default(), persist_settings: false, style: Default::default(), tree_hidden: false, tree_width: None, help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
         };
         app.expanded = app.model.children.values().flatten().filter(|b| b.expanded).map(|b| b.id.clone()).collect();
         app.rebuild_rows();
@@ -387,7 +401,13 @@ impl App {
                     let size: i64 = self.db.conn.query_row(
                         "SELECT COALESCE(length(b.content),0) FROM notes n LEFT JOIN blobs b ON b.blobId=n.blobId WHERE n.noteId=?",
                         [id], |r| r.get(0)).unwrap_or(0);
-                    (Kind::Binary, String::new(), size as usize)
+                    // plain-text files (.txt, .json, ...) are shown like code notes, read-only
+                    let texty = note.ntype == "file" && !note.mime.contains("svg") && size <= 1_000_000 && (note.mime.starts_with("text/") || note.mime.ends_with("json") || note.mime.ends_with("xml") || note.mime.ends_with("javascript") || note.mime.ends_with("yaml") || note.mime.ends_with("toml") || note.mime.ends_with("x-sh"));
+                    let shown = if texty { self.db.note_content(id).ok().flatten().filter(|c| !c.contains(['\u{FFFD}', '\0'])) } else { None };
+                    match shown {
+                        Some(c) => { let n = c.len(); (Kind::Code, c, n) }
+                        None => (Kind::Binary, String::new(), size as usize),
+                    }
                 }
                 other => self.load_string(id, Kind::Unsupported(other.to_string())),
             }
@@ -541,6 +561,23 @@ impl App {
         self.status = format!("inline pictures {}{}", if on { "on" } else { "off" }, if saved { "" } else { " (couldn't save the setting)" });
     }
 
+    pub fn resize_sidebar(&mut self, delta: i32) {
+        let current = if self.tree_area.width > 0 { i32::from(self.tree_area.width) } else { i32::from(self.tree_width.unwrap_or(30)) };
+        self.tree_hidden = false;
+        self.tree_width = Some((current + delta).clamp(16, 120) as u16);
+    }
+
+    pub fn toggle_sidebar(&mut self) {
+        self.tree_hidden = !self.tree_hidden;
+        self.focus = if self.tree_hidden { Focus::Note } else { Focus::Tree };
+    }
+
+    pub fn cycle_style(&mut self) {
+        self.style = self.style.next();
+        let saved = !self.persist_settings || crate::config::config_path().is_some_and(|p| crate::config::save_setting_to(&p, "paneStyle", self.style.name().into()).is_ok());
+        self.status = format!("pane style: {}{}", self.style.name(), if saved { "" } else { " (couldn't save the setting)" });
+    }
+
     pub fn toggle_source(&mut self) {
         let md = self.view.as_ref().is_some_and(|v| matches!(v.kind, Kind::Code) && self.model.notes.get(&v.id).is_some_and(|n| crate::render::is_markdown_mime(&n.mime)));
         if let Some(v) = self.view.as_mut() {
@@ -603,11 +640,38 @@ impl App {
         }
     }
 
+    /// Text and colour for the status bar. It shows no times while client and server match:
+    /// green for a while after a sync that moved changes, grey otherwise, yellow while edits wait or a
+    /// sync runs long, red (with the time of the last good sync) on errors.
+    pub fn sync_status(&self) -> (String, ratatui::style::Color) {
+        use ratatui::style::Color;
+        let settled = || {
+            if self.sync_dirty.get() { return ("unsynced".to_string(), Color::Yellow); }
+            let fresh = self.sync_changed.is_some_and(|t| t.elapsed() < SYNC_GREEN);
+            ("synced".to_string(), if fresh { Color::Green } else { Color::DarkGray })
+        };
+        match &self.sync {
+            SyncState::Off => ("local only".into(), Color::DarkGray),
+            SyncState::Syncing if self.sync_since.elapsed() >= std::time::Duration::from_secs(1) => ("syncing".into(), Color::Yellow),
+            SyncState::Syncing | SyncState::Ok => settled(),
+            SyncState::Error(e) => {
+                let e: String = e.chars().take(40).collect();
+                match self.sync_last_ok {
+                    Some(t) => (format!("{e} · last synced {}", ago(t.elapsed().as_secs())), Color::Red),
+                    None => (e, Color::Red),
+                }
+            }
+        }
+    }
+
     pub fn on_sync(&mut self, msg: SyncMsg) {
         match msg {
-            SyncMsg::Syncing => self.sync = SyncState::Syncing,
+            SyncMsg::Syncing => { self.sync = SyncState::Syncing; self.sync_since = Instant::now(); }
             SyncMsg::Done { pulled, pushed, conflicts, overwritten } => {
-                self.sync = SyncState::Ok(Instant::now(), pushed);
+                self.sync = SyncState::Ok;
+                self.sync_last_ok = Some(Instant::now());
+                if pulled > 0 || pushed > 0 { self.sync_changed = Some(Instant::now()); }
+                self.sync_dirty.set(false);
                 self.synced_once = true;
                 if pulled > 0 { self.reload(); }
                 if self.want_today { self.open_today(); }
@@ -744,6 +808,7 @@ impl App {
             return;
         }
         self.status.clear();
+        if self.tree_hidden { self.focus = Focus::Note; }
         if let Some(action) = self.keymap.action_for(&ev) {
             if !(action.tree_only() && self.focus != Focus::Tree) {
                 self.run_action(action);
@@ -765,6 +830,10 @@ impl App {
             (KeyCode::Char('e'), false) => { self.request_edit(); return; }
             (KeyCode::Char('e'), true) => { self.request_edit_source(); return; }
             (KeyCode::Char('E'), _) => { self.request_edit_external(); return; }
+            (KeyCode::Char('\\'), false) => { self.toggle_sidebar(); return; }
+            (KeyCode::Char('<'), false) => { self.resize_sidebar(-2); return; }
+            (KeyCode::Char('>'), false) => { self.resize_sidebar(2); return; }
+            (KeyCode::Tab, false) | (KeyCode::BackTab, _) if self.tree_hidden => { self.toggle_sidebar(); return; }
             (KeyCode::Tab, false) | (KeyCode::BackTab, _) => {
                 self.focus = if self.focus == Focus::Tree { Focus::Note } else { Focus::Tree };
                 return;
@@ -912,6 +981,10 @@ impl App {
             Action::EditContent => self.request_edit(),
             Action::EditSource => self.request_edit_source(),
             Action::ToggleInlineImages => self.toggle_inline_images(),
+            Action::CycleStyle => self.cycle_style(),
+            Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::SidebarNarrower => self.resize_sidebar(-2),
+            Action::SidebarWider => self.resize_sidebar(2),
             Action::EditExternal => self.request_edit_external(),
             Action::Quit => self.quit = true,
             Action::OpenToday => self.open_today(),
@@ -1220,6 +1293,31 @@ mod tests {
         assert!(labels(&app).contains(&"Alpha".to_string()));
         app.run_action(Action::CollapseTree);
         assert_eq!(labels(&app).len(), 2, "{:?}", labels(&app));
+    }
+
+    #[test]
+    fn sync_status_shows_no_times_and_fades_from_green() {
+        use ratatui::style::Color;
+        let (_d, mut app, _ids) = fixture();
+        assert_eq!(app.sync_status(), ("local only".to_string(), Color::DarkGray));
+        let ago = |s| Instant::now() - std::time::Duration::from_secs(s);
+        app.sync = SyncState::Ok;
+        assert_eq!(app.sync_status(), ("synced".to_string(), Color::DarkGray), "a no-change sync is not news");
+        app.sync_changed = Some(ago(10));
+        assert_eq!(app.sync_status(), ("synced".to_string(), Color::Green));
+        app.sync_changed = Some(ago(61));
+        assert_eq!(app.sync_status(), ("synced".to_string(), Color::DarkGray), "green fades after a minute");
+        app.sync_dirty.set(true);
+        assert_eq!(app.sync_status(), ("unsynced".to_string(), Color::Yellow));
+        app.sync = SyncState::Syncing;
+        app.sync_since = ago(0);
+        assert_eq!(app.sync_status().0, "unsynced", "a quick sync does not flicker");
+        app.sync_since = ago(2);
+        assert_eq!(app.sync_status(), ("syncing".to_string(), Color::Yellow));
+        app.sync = SyncState::Error("connection refused".into());
+        assert_eq!(app.sync_status(), ("connection refused".to_string(), Color::Red));
+        app.sync_last_ok = Some(ago(720));
+        assert_eq!(app.sync_status().0, "connection refused · last synced 12m ago");
     }
 
     #[test]
@@ -2500,4 +2598,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(kept[0].path()).unwrap(), "!<p>mine</p>".replace("!<p>mine</p>", "<p>!mine</p>"));
     }
 
+}
+
+fn ago(secs: u64) -> String {
+    if secs < 90 { format!("{secs}s ago") } else if secs < 5400 { format!("{}m ago", secs / 60) } else { format!("{}h ago", secs / 3600) }
 }

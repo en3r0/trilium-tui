@@ -10,6 +10,8 @@ pub struct Config {
     pub server: Option<String>,
     /// Show pictures inside notes (editor and reading view) instead of `[image: …]` labels; toggled with Alt+V.
     pub inline_images: bool,
+    /// Pane look: "top" (default: a line across the top of each pane plus one divider), "flat" (header + one divider), "filled" (darker tree panel, no lines) or "boxed" (square borders).
+    pub pane_style: Option<String>,
 }
 
 impl Config {
@@ -25,9 +27,12 @@ impl Config {
 pub fn config_path() -> Option<std::path::PathBuf> { dirs::config_dir().map(|d| d.join("trilium-tui").join("config.json")) }
 
 /// Remember the inline-pictures switch in a config file, keeping everything else in it.
-pub fn save_inline_images_to(path: &std::path::Path, on: bool) -> std::io::Result<()> {
+pub fn save_inline_images_to(path: &std::path::Path, on: bool) -> std::io::Result<()> { save_setting_to(path, "inlineImages", serde_json::Value::Bool(on)) }
+
+/// Remember one setting in the config file, keeping everything else in it.
+pub fn save_setting_to(path: &std::path::Path, key: &str, value: serde_json::Value) -> std::io::Result<()> {
     let mut v: serde_json::Value = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).filter(|v: &serde_json::Value| v.is_object()).unwrap_or_else(|| serde_json::json!({}));
-    v["inlineImages"] = serde_json::Value::Bool(on);
+    v[key] = value;
     if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
     std::fs::write(path, serde_json::to_string_pretty(&v).unwrap_or_default() + "\n")
 }

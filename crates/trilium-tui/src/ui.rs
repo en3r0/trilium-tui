@@ -1,11 +1,11 @@
-use crate::app::{App, Confirm, Focus, Kind, Overlay, Picker, PickerKind, Prompt, SyncState, ViewMode};
+use crate::app::{App, Confirm, Focus, Kind, Overlay, Picker, PickerKind, Prompt, ViewMode};
 use crate::{highlight, keymap::Action, render};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Block, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -13,14 +13,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let show_tabs = app.tabs.len() > 1;
     let [tabbar, main, status] = Layout::vertical([Constraint::Length(u16::from(show_tabs)), Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
     if show_tabs { draw_tabs(f, app, tabbar); }
+    if app.tree_hidden { app.focus = Focus::Note; }
     let narrow = main.width < 80;
-    let (tree_r, note_r) = if narrow {
+    let (tree_r, note_r) = if app.tree_hidden {
+        (Rect::default(), main)
+    } else if narrow {
         match app.focus {
             Focus::Tree => (main, Rect::default()),
             Focus::Note => (Rect::default(), main),
         }
     } else {
-        let tw = ((u32::from(main.width) * 30 / 100) as u16).clamp(24, 48);
+        let tw = app.tree_width.unwrap_or(((u32::from(main.width) * 30 / 100) as u16).clamp(24, 48)).min(main.width.saturating_sub(24)).max(16);
         let [t, n] = Layout::horizontal([Constraint::Length(tw), Constraint::Min(20)]).areas(main);
         (t, n)
     };
@@ -46,11 +49,63 @@ fn focus_style(focused: bool) -> Style {
     if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) }
 }
 
+fn header_style(focused: bool) -> Style {
+    if focused { Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD) }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub enum PaneStyle { Flat, Filled, Boxed, #[default] Top }
+
+impl PaneStyle {
+    pub fn parse(s: &str) -> Self { match s { "filled" => Self::Filled, "boxed" => Self::Boxed, "top" => Self::Top, "flat" => Self::Flat, _ => Self::default() } }
+    pub fn name(self) -> &'static str { match self { Self::Flat => "flat", Self::Filled => "filled", Self::Boxed => "boxed", Self::Top => "top" } }
+    pub fn next(self) -> Self { match self { Self::Flat => Self::Filled, Self::Filled => Self::Boxed, Self::Boxed => Self::Top, Self::Top => Self::Flat } }
+}
+
+/// Darker surface behind the tree in the filled style.
+const SURFACE: Color = Color::Black;
+
+/// Draws a pane's frame in the chosen style and returns the content area (one column of left padding included).
+/// `side` panes have a neighbour on their right.
+fn pane_frame(f: &mut Frame, style: PaneStyle, area: Rect, header: Line<'static>, side: bool, focused: bool) -> Rect {
+    if area.width < 3 || area.height < 3 { return Rect::default(); }
+    match style {
+        PaneStyle::Boxed => {
+            let block = Block::bordered().border_style(focus_style(focused)).title(header);
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            inner
+        }
+        PaneStyle::Top => {
+            // flat, plus the top edge of the box: a line across the pane with the title set into it
+            let w = area.width - u16::from(side);
+            let block = Block::new().borders(ratatui::widgets::Borders::TOP).border_style(focus_style(focused))
+                .title(Line::from(vec![Span::raw(" "), Span::raw("")]).spans.into_iter().chain(header.spans).chain([Span::raw(" ")]).collect::<Line>());
+            f.render_widget(block, Rect { width: w - u16::from(side), height: 1, ..area }); // a gap keeps the line off the side rule
+            if side {
+                let lines: Vec<Line> = (1..area.height).map(|_| Line::from("│")).collect();
+                f.render_widget(Paragraph::new(lines).style(focus_style(focused)), Rect { x: area.x + w, y: area.y + 1, width: 1, height: area.height - 1 });
+            }
+            Rect { x: area.x + 1, y: area.y + 1, width: w - 1, height: area.height - 1 }
+        }
+        PaneStyle::Flat | PaneStyle::Filled => {
+            let filled = style == PaneStyle::Filled && side;
+            let w = area.width - u16::from(side && !filled);
+            if filled { f.render_widget(Block::new().style(Style::default().bg(SURFACE)), area); }
+            f.render_widget(Paragraph::new(header), Rect { x: area.x + 1, y: area.y, width: w.saturating_sub(1), height: 1 });
+            if side && !filled {
+                let lines: Vec<Line> = (0..area.height).map(|_| Line::from("│")).collect();
+                f.render_widget(Paragraph::new(lines).style(focus_style(focused)), Rect { x: area.x + w, width: 1, ..area });
+            }
+            Rect { x: area.x + 1, y: area.y + 1, width: w - 1, height: area.height - 1 }
+        }
+    }
+}
+
 fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     let title = if app.hoisted == "root" { " Notes ".to_string() } else { format!(" ⌂ {} ", app.model.title_of(&app.hoisted)) };
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(focus_style(app.focus == Focus::Tree)).title(title);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let tf = app.focus == Focus::Tree;
+    let inner = pane_frame(f, app.style, area, Line::from(Span::styled(title.trim().to_string(), header_style(tf))), true, tf);
     let h = inner.height as usize;
     app.tree_height = h;
     if app.sel < app.tree_scroll { app.tree_scroll = app.sel; }
@@ -146,18 +201,15 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
         _ => (String::new(), String::new()),
     };
     let editing = app.rich.as_ref().filter(|_| !matches!(app.overlay, Overlay::Edit(_)));
-    let block = match editing {
+    let header = match editing {
         Some(r) => {
             let accent = Style::default().fg(Color::Cyan);
-            let modified = if r.dirty() { Span::styled(" ● ", Style::default().fg(Color::Yellow)) } else { Span::raw(" ") };
-            Block::bordered().border_type(BorderType::Rounded).border_style(accent)
-                .title(Line::from(vec![Span::styled(" ✎ ", accent), Span::styled(r.title.clone(), Style::default().add_modifier(Modifier::BOLD)), modified]))
+            let modified = if r.dirty() { Span::styled(" ●", Style::default().fg(Color::Yellow)) } else { Span::raw("") };
+            Line::from(vec![Span::styled("✎ ", accent), Span::styled(r.title.clone(), accent.add_modifier(Modifier::BOLD)), modified])
         }
-        None => Block::bordered().border_type(BorderType::Rounded).border_style(focus_style(focused))
-            .title(Line::from(vec![Span::raw(format!(" {title} ")), Span::styled(format!("[{badge}] "), Style::default().fg(Color::DarkGray))])),
+        None => Line::from(vec![Span::styled(title.clone(), header_style(focused)), Span::styled(format!("  [{badge}]"), Style::default().fg(Color::DarkGray))]),
     };
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = pane_frame(f, app.style, area, header, false, editing.is_some() || focused);
     let has_attrs = app.view.as_ref().is_some_and(|v| !v.attrs.is_empty());
     let [content_r, attr_r] = Layout::vertical([Constraint::Min(1), Constraint::Length(u16::from(has_attrs))]).areas(inner);
     let content_r = Rect { x: content_r.x + 1, width: content_r.width.saturating_sub(2), ..content_r };
@@ -349,7 +401,7 @@ fn draw_picture(f: &mut Frame, pic: &mut crate::images::Picture, area: Rect, cap
 
 fn draw_image_overlay(f: &mut Frame, pic: &mut crate::images::Picture, area: Rect) {
     f.render_widget(Clear, area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Cyan)).title(format!(" {} ", pic.title));
+    let block = Block::bordered().border_style(Style::default().fg(Color::Cyan)).title(format!(" {} ", pic.title));
     let inner = block.inner(area);
     f.render_widget(block, area);
     let [img_r, foot_r] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
@@ -359,20 +411,15 @@ fn draw_image_overlay(f: &mut Frame, pic: &mut crate::images::Picture, area: Rec
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
-    let (sync, sync_color) = match &app.sync {
-        SyncState::Off => ("local only".to_string(), Color::DarkGray),
-        SyncState::Syncing => ("⟳ syncing".to_string(), Color::Yellow),
-        SyncState::Ok(t, pushed) => {
-            let s = t.elapsed().as_secs();
-            let up = if *pushed > 0 { format!(" ↑{pushed}") } else { String::new() };
-            (if s < 5 { format!("✓ synced{up}") } else { format!("✓ synced {s}s ago{up}") }, Color::Green)
-        }
-        SyncState::Error(e) => (format!("✗ {}", e.chars().take(40).collect::<String>()), Color::Red),
-    };
-    let pct = app.view.as_ref().and_then(|v| v.cache.as_ref().map(|c| (v.scroll, c.2.len()))).map(|(s, t)| if t == 0 { 100 } else { ((s + app.note_height).min(t)) * 100 / t }).unwrap_or(0);
+    let (sync, sync_color) = app.sync_status();
+    // scroll position, only when the note is longer than the pane
+    let pct = app.view.as_ref().and_then(|v| v.cache.as_ref().map(|c| (v.scroll, c.2.len())))
+        .filter(|(_, t)| *t > app.note_height)
+        .map_or(String::new(), |(s, t)| format!("{}%  ", ((s + app.note_height).min(t)) * 100 / t));
     let dim = Style::default().fg(Color::DarkGray);
-    let lock = if app.db.has_password() { if app.db.is_unlocked() { "🔓 " } else { "🔒 " } } else { "" };
-    let right_text = format!("{lock}{pct}%  {sync}  F1 help ");
+    let protected_note = app.view.as_ref().and_then(|v| app.model.notes.get(&v.id)).is_some_and(|n| n.protected);
+    let lock = if protected_note { if app.db.is_unlocked() { "unlocked  " } else { "protected  " } } else { "" };
+    let right_text = format!("{lock}{pct}{sync}  F1 help ");
     let w = area.width as usize;
     let lw = w.saturating_sub(right_text.width() + 2);
     let mut left_spans: Vec<Span> = vec![Span::raw(" ")];
@@ -399,7 +446,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let lused: usize = left_spans.iter().map(|s| s.content.width()).sum();
     let pad = w.saturating_sub(lused + right_text.width());
     left_spans.push(Span::raw(" ".repeat(pad)));
-    left_spans.push(Span::styled(format!("{lock}{pct}%  "), dim));
+    left_spans.push(Span::styled(format!("{lock}{pct}"), dim));
     left_spans.push(Span::styled(sync, Style::default().fg(sync_color)));
     left_spans.push(Span::styled("  F1 help ", dim));
     f.render_widget(Paragraph::new(Line::from(left_spans)), area);
@@ -414,7 +461,7 @@ fn draw_picker(f: &mut Frame, app: &App, p: &Picker, area: Rect) {
     let r = centered(area, 80, (area.height * 2 / 3).max(8));
     f.render_widget(Clear, r);
     let title = match p.kind { PickerKind::Jump => " Jump to note ", PickerKind::Search => " Search (Enter to run) ", PickerKind::Command => " Command palette ", PickerKind::CloneTo => " Clone to… (pick the parent) ", PickerKind::MoveTo => " Move to… (pick the parent) ", PickerKind::LinkNote => " Link to note " };
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Cyan)).title(title);
+    let block = Block::bordered().border_style(Style::default().fg(Color::Cyan)).title(title);
     let inner = block.inner(r);
     f.render_widget(block, r);
     let [input_r, list_r] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
@@ -459,7 +506,7 @@ fn first_key(app: &App, a: Action) -> String { app.keymap.labels_for(a).into_ite
 fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let r = centered(area, 104, area.height.saturating_sub(4).max(10));
     f.render_widget(Clear, r);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Cyan)).title(" Help — ↑↓ scroll · any other key closes ");
+    let block = Block::bordered().border_style(Style::default().fg(Color::Cyan)).title(" Help — ↑↓ scroll · any other key closes ");
     let inner = block.inner(r);
     f.render_widget(block, r);
     let dim = Style::default().fg(Color::DarkGray);
@@ -529,6 +576,8 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
         Line::default(),
         h("Anywhere"),
         row("Tab".into(), "switch pane"),
+        row("\\".into(), "hide / show the sidebar (note tree); Tab shows it again"),
+        row("< / >".into(), "make the sidebar narrower / wider"),
         row("/".into(), "search"),
         row("q, Ctrl+Q".into(), "quit"),
         Line::default(),
@@ -548,7 +597,7 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
 fn draw_prompt(f: &mut Frame, p: &Prompt, area: Rect) {
     let r = centered(area, 70, 4);
     f.render_widget(Clear, r);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Cyan)).title(format!(" {} ", p.label));
+    let block = Block::bordered().border_style(Style::default().fg(Color::Cyan)).title(format!(" {} ", p.label));
     let inner = block.inner(r);
     f.render_widget(block, r);
     let shown: Vec<char> = if p.secret { vec!['•'; p.text.len()] } else { p.text.clone() };
@@ -562,7 +611,7 @@ fn draw_prompt(f: &mut Frame, p: &Prompt, area: Rect) {
 fn draw_confirm(f: &mut Frame, c: &Confirm, area: Rect) {
     let r = centered(area, (c.message.width() as u16 + 6).clamp(30, 90), 4);
     f.render_widget(Clear, r);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Red)).title(" Confirm ");
+    let block = Block::bordered().border_style(Style::default().fg(Color::Red)).title(" Confirm ");
     let inner = block.inner(r);
     f.render_widget(block, r);
     f.render_widget(Paragraph::new(vec![Line::from(c.message.clone()), Line::from(Span::styled("y = yes, any other key = cancel", Style::default().fg(Color::DarkGray)))]), Rect { x: inner.x + 1, width: inner.width.saturating_sub(2), ..inner });
@@ -573,7 +622,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     for (i, (title, active)) in app.tab_titles().into_iter().enumerate() {
         let mut t: String = title.chars().take(22).collect();
         if title.chars().count() > 22 { t.push('…'); }
-        let st = if active { Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { Style::default().fg(Color::DarkGray) };
+        let st = if active { Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
         spans.push(Span::styled(format!(" {} {t} ", i + 1), st));
         spans.push(Span::raw(" "));
     }
@@ -585,7 +634,7 @@ fn draw_panel(f: &mut Frame, app: &App, p: &crate::panel::Panel, area: Rect) {
     let r = centered(area, area.width.saturating_sub(6).min(120), area.height.saturating_sub(4).max(10));
     f.render_widget(Clear, r);
     let title = format!(" {} ", app.model.title_of(&p.note_id));
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Cyan)).title(title);
+    let block = Block::bordered().border_style(Style::default().fg(Color::Cyan)).title(title);
     let inner = block.inner(r);
     f.render_widget(block, r);
     let [tabs_r, body_r, foot_r] = Layout::vertical([Constraint::Length(2), Constraint::Min(1), Constraint::Length(1)]).areas(inner);

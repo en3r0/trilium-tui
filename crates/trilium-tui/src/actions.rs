@@ -18,6 +18,7 @@ impl App {
     pub fn open_prompt_pub(&mut self, kind: PromptKind, label: &str, initial: &str) { self.open_prompt(kind, label, initial); }
 
     fn poke_sync(&self) {
+        if self.sync_trigger.is_some() { self.sync_dirty.set(true); }
         if let Some(t) = &self.sync_trigger { let _ = t.send(()); }
     }
 
@@ -506,6 +507,7 @@ impl App {
 
     fn editable_id(&mut self) -> Option<String> {
         let v = self.view.as_ref()?;
+        if self.model.notes.get(&v.id).is_some_and(|n| n.ntype == "file") { self.status = "file notes are read-only here (the bytes must stay exact)".into(); return None; }
         match v.kind {
             Kind::Html | Kind::Code | Kind::Unsupported(_) => Some(v.id.clone()),
             Kind::Protected => { self.status = "this note is locked; unlock protected notes first (command palette)".into(); None }

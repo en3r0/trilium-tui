@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Clear, Paragraph},
+    widgets::{Block, Clear, Paragraph},
 };
 use std::io::Write;
 use unicode_width::UnicodeWidthChar;
@@ -226,7 +226,7 @@ pub fn draw(f: &mut Frame, s: &mut EditSession, area: Rect) {
     let accent = Style::default().fg(Color::Cyan);
     let dim = Style::default().fg(Color::DarkGray);
     let modified = if s.buf.changed() { Span::styled(" ● ", Style::default().fg(Color::Yellow)) } else { Span::raw(" ") };
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(accent)
+    let block = Block::bordered().border_style(accent)
         .title(Line::from(vec![Span::styled(" ✎ ", accent), Span::styled(s.title.clone(), Style::default().add_modifier(Modifier::BOLD)), modified]));
     let inner = block.inner(area);
     f.render_widget(block, area);
