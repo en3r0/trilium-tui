@@ -744,7 +744,7 @@ impl App {
             (KeyCode::Char('i'), false) => { self.open_panel(crate::panel::PanelTab::Info); return; }
             (KeyCode::Char('b'), false) if self.focus == Focus::Tree => { self.open_panel(crate::panel::PanelTab::Backlinks); return; }
             (KeyCode::Char('v'), false) if self.focus == Focus::Tree => { self.open_panel(crate::panel::PanelTab::Revisions); return; }
-            (KeyCode::Char('e'), false) if self.focus == Focus::Note => { self.request_edit(); return; }
+            (KeyCode::Char('e'), false) => { self.request_edit(); return; }
             (KeyCode::Char('e'), true) => { self.request_edit_source(); return; }
             (KeyCode::Char('E'), _) => { self.request_edit_external(); return; }
             (KeyCode::Tab, false) | (KeyCode::BackTab, _) => {
@@ -2166,6 +2166,18 @@ mod tests {
         app.handle_key(key(KeyCode::Esc));
         assert!(app.rich.is_none(), "clean editor closes at once");
         assert!(screen(&mut app, 100, 30).contains("Xone link"), "the pane shows the saved note again");
+    }
+
+    #[test]
+    fn e_starts_editing_the_highlighted_note_from_the_tree() {
+        let (_d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<p>tree</p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.focus = Focus::Tree;
+        app.handle_key(key(KeyCode::Char('e')));
+        assert!(app.rich.is_some() && app.focus == Focus::Note, "e edits the highlighted note even with the tree focused");
+        app.handle_key(key(KeyCode::Char('!')));
+        assert_eq!(app.rich.as_ref().unwrap().html(), "<p>!tree</p>");
     }
 
     #[test]
