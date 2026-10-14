@@ -226,7 +226,7 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
         None => Line::from(vec![Span::styled(title.clone(), header_style(focused)), Span::styled(format!("  [{badge}]"), Style::default().fg(Color::DarkGray))]),
     };
     let inner = if app.zen { area } else { pane_frame(f, app.style, area, header, false, editing.is_some() || focused) };
-    let has_attrs = app.view.as_ref().is_some_and(|v| !v.attrs.is_empty());
+    let has_attrs = !app.zen && app.view.as_ref().is_some_and(|v| !v.attrs.is_empty());
     let [content_r, attr_r] = Layout::vertical([Constraint::Min(1), Constraint::Length(u16::from(has_attrs))]).areas(inner);
     let content_r = Rect { x: content_r.x + 1, width: content_r.width.saturating_sub(2), ..content_r };
     app.note_height = content_r.height as usize;
