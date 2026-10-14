@@ -9,13 +9,26 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+/// widest text column in zen mode (windows wider than this get side margins)
+const ZEN_COLUMN: u16 = 100;
+
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let show_tabs = app.tabs.len() > 1;
-    let [tabbar, main, status] = Layout::vertical([Constraint::Length(u16::from(show_tabs)), Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
+    let show_tabs = app.tabs.len() > 1 && !app.zen;
+    let [tabbar, main, status] = if app.zen {
+        // zen: the note gets the whole window; a status message (error, confirmation) is drawn over its last row
+        let full = f.area();
+        [Rect::default(), full, Rect { y: full.y + full.height.saturating_sub(1), height: full.height.min(1), ..full }]
+    } else {
+        Layout::vertical([Constraint::Length(u16::from(show_tabs)), Constraint::Min(3), Constraint::Length(1)]).areas(f.area())
+    };
     if show_tabs { draw_tabs(f, app, tabbar); }
-    if app.tree_hidden { app.focus = Focus::Note; }
+    if app.tree_hidden || app.zen { app.focus = Focus::Note; }
     let narrow = main.width < 80;
-    let (tree_r, note_r) = if app.tree_hidden {
+    let (tree_r, note_r) = if app.zen {
+        // wide windows: a centred column; narrow ones: the full width
+        let w = main.width.min(ZEN_COLUMN);
+        (Rect::default(), Rect { x: main.x + (main.width - w) / 2, width: w, ..main })
+    } else if app.tree_hidden {
         (Rect::default(), main)
     } else if narrow {
         match app.focus {
@@ -31,7 +44,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.note_area = note_r;
     if tree_r.width > 0 { draw_tree(f, app, tree_r); }
     if note_r.width > 0 { draw_note(f, app, note_r); }
-    draw_status(f, app, status);
+    if !app.zen || !app.status.is_empty() {
+        if app.zen { f.render_widget(Clear, status); }
+        draw_status(f, app, status);
+    }
     if let Overlay::Image(p) = &mut app.overlay { draw_image_overlay(f, p, f.area()); return; }
     if let Overlay::Edit(s) = &mut app.overlay { app.edit_area = f.area(); crate::edit_view::draw(f, s, f.area()); return; }
     match &app.overlay {
@@ -209,7 +225,7 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
         }
         None => Line::from(vec![Span::styled(title.clone(), header_style(focused)), Span::styled(format!("  [{badge}]"), Style::default().fg(Color::DarkGray))]),
     };
-    let inner = pane_frame(f, app.style, area, header, false, editing.is_some() || focused);
+    let inner = if app.zen { area } else { pane_frame(f, app.style, area, header, false, editing.is_some() || focused) };
     let has_attrs = app.view.as_ref().is_some_and(|v| !v.attrs.is_empty());
     let [content_r, attr_r] = Layout::vertical([Constraint::Min(1), Constraint::Length(u16::from(has_attrs))]).areas(inner);
     let content_r = Rect { x: content_r.x + 1, width: content_r.width.saturating_sub(2), ..content_r };
@@ -577,6 +593,7 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
         h("Anywhere"),
         row("Tab".into(), "switch pane"),
         row("\\".into(), "hide / show the sidebar (note tree); Tab shows it again"),
+        row("Z  F11".into(), "zen mode: only the note text; Esc (or Z / F11) leaves it"),
         row("< / >".into(), "make the sidebar narrower / wider"),
         row("/".into(), "search"),
         row("q, Ctrl+Q".into(), "quit"),

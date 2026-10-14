@@ -200,6 +200,8 @@ pub struct App {
     pub style: crate::ui::PaneStyle,
     /// sidebar (note tree) collapsed; the note pane then fills the window
     pub tree_hidden: bool,
+    /// zen mode (Z / F11): only the note text is drawn; Esc leaves it
+    pub zen: bool,
     /// sidebar width set with < and >; None = 30% of the window (24 to 48 columns)
     pub tree_width: Option<u16>,
     pub help_scroll: std::cell::Cell<usize>,
@@ -226,7 +228,7 @@ impl App {
             db, model, keymap: Keymap::load(), rows: vec![], sel: 0, tree_scroll: 0,
             expanded: HashSet::new(), show_archived: false, hoisted: ROOT.into(), focus: Focus::Tree,
             overlay: Overlay::None, history: vec![], hist_idx: 0, view: None, status: String::new(),
-            sync: SyncState::Off, sync_since: Instant::now(), sync_last_ok: None, sync_changed: None, sync_dirty: Default::default(), sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), rich: None, new_attachments: vec![], imgs: Default::default(), persist_settings: false, style: Default::default(), tree_hidden: false, tree_width: None, help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
+            sync: SyncState::Off, sync_since: Instant::now(), sync_last_ok: None, sync_changed: None, sync_dirty: Default::default(), sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), rich: None, new_attachments: vec![], imgs: Default::default(), persist_settings: false, style: Default::default(), tree_hidden: false, zen: false, tree_width: None, help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
         };
         app.expanded = app.model.children.values().flatten().filter(|b| b.expanded).map(|b| b.id.clone()).collect();
         app.rebuild_rows();
@@ -567,7 +569,13 @@ impl App {
         self.tree_width = Some((current + delta).clamp(16, 120) as u16);
     }
 
+    pub fn toggle_zen(&mut self) {
+        self.zen = !self.zen;
+        if self.zen { self.focus = Focus::Note; }
+    }
+
     pub fn toggle_sidebar(&mut self) {
+        if self.zen { self.zen = false; }
         self.tree_hidden = !self.tree_hidden;
         self.focus = if self.tree_hidden { Focus::Note } else { Focus::Tree };
     }
@@ -782,6 +790,7 @@ impl App {
         }
         if self.rich.is_some() && matches!(self.overlay, Overlay::None) {
             if ev.code == KeyCode::F(1) { self.overlay = Overlay::Help; return; }
+            if ev.code == KeyCode::F(11) { self.toggle_zen(); return; }
             self.rich_key(ev);
             return;
         }
@@ -808,7 +817,8 @@ impl App {
             return;
         }
         self.status.clear();
-        if self.tree_hidden { self.focus = Focus::Note; }
+        if self.zen && ev.code == KeyCode::Esc { self.zen = false; return; }
+        if self.tree_hidden || self.zen { self.focus = Focus::Note; }
         if let Some(action) = self.keymap.action_for(&ev) {
             if !(action.tree_only() && self.focus != Focus::Tree) {
                 self.run_action(action);
@@ -831,6 +841,7 @@ impl App {
             (KeyCode::Char('e'), true) => { self.request_edit_source(); return; }
             (KeyCode::Char('E'), _) => { self.request_edit_external(); return; }
             (KeyCode::Char('\\'), false) => { self.toggle_sidebar(); return; }
+            (KeyCode::Char('Z'), false) | (KeyCode::F(11), _) => { self.toggle_zen(); return; }
             (KeyCode::Char('<'), false) => { self.resize_sidebar(-2); return; }
             (KeyCode::Char('>'), false) => { self.resize_sidebar(2); return; }
             (KeyCode::Tab, false) | (KeyCode::BackTab, _) if self.tree_hidden => { self.toggle_sidebar(); return; }
@@ -983,6 +994,7 @@ impl App {
             Action::ToggleInlineImages => self.toggle_inline_images(),
             Action::CycleStyle => self.cycle_style(),
             Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::ToggleZen => self.toggle_zen(),
             Action::SidebarNarrower => self.resize_sidebar(-2),
             Action::SidebarWider => self.resize_sidebar(2),
             Action::EditExternal => self.request_edit_external(),
@@ -1214,6 +1226,27 @@ mod tests {
         t.draw(|f| crate::ui::draw(f, app)).unwrap();
         let buf = t.backend().buffer().clone();
         (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn zen_mode_hides_chrome_centres_wide_text_and_esc_leaves() {
+        let (_d, mut app, _ids) = fixture();
+        let normal = screen(&mut app, 80, 12);
+        assert!(normal.contains("F1 help"));
+        app.handle_key(key(KeyCode::Char('Z')));
+        assert!(app.zen);
+        let zen = screen(&mut app, 80, 12);
+        assert!(!zen.contains("F1 help") && !zen.contains("Epsilon needle"), "{zen}");
+        assert_eq!(app.note_area.width, 80, "narrow windows use the full width");
+        screen(&mut app, 160, 12);
+        assert_eq!((app.note_area.x, app.note_area.width), (30, 100), "wide windows get a centred column");
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.zen);
+        app.handle_key(key(KeyCode::F(11)));
+        assert!(app.zen);
+        app.handle_key(key(KeyCode::F(11)));
+        assert!(!app.zen);
+        assert!(screen(&mut app, 80, 12).contains("F1 help"));
     }
 
     #[test]
