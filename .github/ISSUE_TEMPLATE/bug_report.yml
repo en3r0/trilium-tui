@@ -1,0 +1,64 @@
+name: Bug report
+description: Something doesn't work, looks wrong, or lost data
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **If notes were lost or changed unexpectedly, stop editing and check `lost-edits/` and `overwritten/` next to your database (`~/.local/share/trilium-tui/`), and the daily `*.bak-*.db` backups, before doing anything else.**
+        Please don't paste private note content. A tiny made-up example is enough.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you pressed or ran, in order.
+      placeholder: |
+        1. Open a note with a table
+        2. Press `e`
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: trilium-tui version
+      description: Output of `trilium-cli --version`
+      placeholder: trilium-cli 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Prebuilt binary from a release
+        - Built from source (packaging/install.sh or cargo)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Trilium server version (or "local only")
+      description: Settings > About in the Trilium web app. Say "local only" if you don't sync.
+      placeholder: v0.106.0
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: OS and terminal
+      placeholder: Arch Linux (Omarchy), foot 1.x, inside tmux? yes/no
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Error text from the status bar, a screenshot, or `trilium-cli verify` output if it's about sync.

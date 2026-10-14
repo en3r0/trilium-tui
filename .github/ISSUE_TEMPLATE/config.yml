@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Trilium itself (server, web app, desktop app)
+    url: https://github.com/TriliumNext/Trilium/issues
+    about: Problems with the Trilium server or its own apps belong upstream, not here.

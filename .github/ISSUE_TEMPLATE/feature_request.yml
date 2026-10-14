@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest an improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The goal matters more than the solution. What is awkward or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?
+  - type: textarea
+    id: trilium
+    attributes:
+      label: How does Trilium's own app do it?
+      description: If the web or desktop app already has this, say how it behaves. This project follows Trilium's behaviour wherever a terminal allows.
