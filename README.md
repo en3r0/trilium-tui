@@ -5,7 +5,7 @@
 <p align="center">
   <img src="docs/media/demo.gif" alt="trilium-tui demo: browsing notes, editing in place, search, command palette" width="800">
 </p>
-<p align="center"><a href="docs/media/demo.mp4">Watch the demo as a video (MP4, 48 s)</a></p>
+<p align="center"><a href="docs/media/demo.mp4">Watch the demo as a video (MP4, 48 s, with key hints)</a></p>
 
 trilium-tui keeps a **local copy** of your notes and talks to your Trilium server in the background, using the same sync protocol as the official desktop app. Every keystroke is handled locally, so the interface never waits on the network. No server? It works fully offline too.
 
