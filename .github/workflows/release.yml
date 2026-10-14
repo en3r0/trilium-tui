@@ -1,0 +1,64 @@
+name: release
+
+# Push a tag like v0.1.0 to build Linux binaries and publish them as a GitHub Release.
+# "Run workflow" on the Actions tab builds the same tarballs without releasing (download them from the run).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-22.04 }      # oldest glibc we can get: runs on most distros
+          - { arch: aarch64, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          [ "$want" = "$have" ] || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $have"; exit 1; }
+      - name: Toolchain
+        run: rustup update stable && rustc --version
+      - name: Build
+        run: cargo build --release --locked
+      - name: Smoke test
+        run: |
+          target/release/trilium-tui --help | head -1
+          target/release/trilium-cli --version
+      - name: Package
+        run: |
+          ver=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          packaging/make-dist.sh "$ver" ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trilium-tui-${{ matrix.arch }}-linux
+          path: dist/*.tar.gz*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

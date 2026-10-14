@@ -23,7 +23,17 @@ It ships two programs: `trilium-tui` (the interface) and `trilium-cli` (the same
 
 ## Install
 
-You need a Rust toolchain (1.85 or newer, edition 2024). Prebuilt binaries are not published yet.
+**Prebuilt binaries (Linux, x86_64 and aarch64)** are attached to each [release](https://github.com/en3r0/trilium-tui/releases). They need nothing installed (no Rust, no OpenSSL) and run on any distribution with glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora, Arch, ...).
+
+```sh
+tar -xzf trilium-tui-*-linux.tar.gz
+cd trilium-tui-*-linux
+./install.sh
+```
+
+This copies `trilium-tui` and `trilium-cli` into `~/.local/bin` and adds shell completions. On Omarchy it also adds a launcher entry. It needs no root. Make sure `~/.local/bin` is on your `PATH`. To check the download first: `sha256sum -c trilium-tui-*.tar.gz.sha256`.
+
+**From source** needs a Rust toolchain (1.85 or newer, edition 2024):
 
 ```sh
 git clone https://github.com/en3r0/trilium-tui
@@ -31,9 +41,7 @@ cd trilium-tui
 packaging/install.sh
 ```
 
-This builds a release binary and installs `trilium-tui` and `trilium-cli` into `~/.local/bin`, plus shell completions and a desktop launcher entry. It needs no root and does not touch your Hyprland config (it prints an optional keybinding). Make sure `~/.local/bin` is on your `PATH`.
-
-Arch users can instead run `makepkg -si` in `packaging/`. Prefer to build by hand? `cargo build --release` puts both binaries in `target/release/`.
+This builds a release binary and installs the same files as above. It does not touch your Hyprland config (it prints an optional keybinding). Arch users can instead run `makepkg -si` in `packaging/`. Prefer to build by hand? `cargo build --release` puts both binaries in `target/release/`.
 
 ## Get started in a minute
 
