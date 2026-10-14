@@ -8,6 +8,7 @@ mod editor;
 mod highlight;
 mod images;
 mod keymap;
+mod math;
 mod panel;
 mod render;
 mod rich_view;

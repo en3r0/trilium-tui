@@ -66,6 +66,25 @@ pub fn render_html_full(html: &str, width: usize, resolver: Resolver) -> Rendere
     r.finish()
 }
 
+fn host_of(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    rest.split(['/', '?', '#']).next().unwrap_or(rest).trim_start_matches("www.").to_string()
+}
+
+/// Terminal stand-ins for the commonly used Boxicons; unmapped names are shown as `[name]`.
+fn icon_glyph(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "star" | "bxs-star" => "★", "check" | "check-circle" | "check-double" => "✓", "x" | "x-circle" => "✗", "heart" | "bxs-heart" => "♥",
+        "bell" => "🔔", "calendar" | "calendar-event" => "📅", "folder" | "folder-open" => "📁", "file" | "file-blank" => "📄", "link" | "link-alt" => "🔗",
+        "home" | "home-alt" => "🏠", "bulb" => "💡", "flag" => "⚑", "pin" => "📌", "lock" | "lock-alt" => "🔒", "key" => "🔑", "time" | "time-five" => "🕒",
+        "search" => "🔍", "cog" => "⚙", "trash" => "🗑", "edit" | "pencil" => "✎", "info-circle" => "ℹ", "error" | "error-circle" => "⚠", "bookmark" => "🔖",
+        "envelope" | "mail-send" => "✉", "phone" => "☎", "user" | "user-circle" => "👤", "world" | "globe" => "🌐", "camera" => "📷", "music" => "♪",
+        "right-arrow-alt" | "right-arrow" => "→", "left-arrow-alt" | "left-arrow" => "←", "up-arrow-alt" | "up-arrow" => "↑", "down-arrow-alt" | "down-arrow" => "↓",
+        "plus" => "+", "minus" => "−", "play" | "play-circle" => "▶", "sun" => "☀", "moon" => "☾", "cloud" => "☁", "rocket" => "🚀", "code" | "code-alt" => "‹›",
+        _ => return None,
+    })
+}
+
 fn is_block(name: &str) -> bool {
     matches!(name, "p" | "div" | "section" | "figure" | "figcaption" | "article" | "header" | "footer" | "main" | "aside" | "details" | "summary"
         | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "pre" | "table" | "hr" | "dl" | "dt" | "dd")
@@ -113,7 +132,7 @@ impl Renderer<'_> {
     fn element(&mut self, el: ElementRef, style: Style) {
         let name = el.value().name();
         match name {
-            "script" | "style" | "head" | "template" => return,
+            "script" | "style" | "head" | "template" | "noscript" => return,
             "br" => { self.flush_keep_blank(); return; }
             "hr" => {
                 self.block_break();
@@ -146,6 +165,7 @@ impl Renderer<'_> {
         if matches!(name, "section" | "figure") && el.value().classes().any(|c| c == "include-note") {
             if let Some(id) = el.value().attr("data-note-id") { self.include_note(id); return; }
         }
+        if let Some(done) = self.special(el, name, style) { if done { return; } }
         if name == "section" && el.value().classes().any(|c| c == "link-embed") {
             if let Some(url) = el.value().attr("data-url").filter(|u| !u.is_empty()) { self.link_embed(el, url); return; }
         }
@@ -210,27 +230,155 @@ impl Renderer<'_> {
         }
     }
 
-    /// Link preview ("link-embed"): everything is in `data-*` attributes, so show title, description and URL as a card.
-    fn link_embed(&mut self, el: ElementRef, url: &str) {
+    /// Trilium's richer editor objects (media, callouts, collapsibles, tabs, columns, math, footnotes, icons, embeds).
+    /// `Some(true)` = fully rendered here.
+    fn special(&mut self, el: ElementRef, name: &str, style: Style) -> Option<bool> {
+        let has = |c: &str| el.value().classes().any(|x| x == c);
+        let dim = Style::default().fg(Color::DarkGray);
+        match name {
+            "figure" if has("media") => {
+                let url = el.descendants().filter_map(ElementRef::wrap).find(|e| e.value().name() == "oembed").and_then(|e| e.value().attr("url"))?;
+                self.card("▶ ", &format!("Video · {}", host_of(url)), None, url);
+                Some(true)
+            }
+            "iframe" => {
+                let url = el.value().attr("src").filter(|u| !u.is_empty())?;
+                self.card("⧉ ", &format!("Embedded page · {}", host_of(url)), None, url);
+                Some(true)
+            }
+            "svg" => {
+                let title = el.descendants().filter_map(ElementRef::wrap).find(|e| e.value().name() == "title").map(|e| e.text().collect::<String>());
+                let label = match title.as_deref().map(str::trim).filter(|t| !t.is_empty()) { Some(t) => format!("[svg: {t}]"), None => "[svg]".to_string() };
+                self.runs.push((label, dim));
+                Some(true)
+            }
+            "aside" if has("admonition") => {
+                let (label, color) = match ["note", "tip", "important", "caution", "warning"].into_iter().find(|k| has(k)) {
+                    Some("tip") => ("💡 Tip", Color::Green),
+                    Some("important") => ("❗ Important", Color::Magenta),
+                    Some("caution") => ("🔥 Caution", Color::Red),
+                    Some("warning") => ("⚠ Warning", Color::Yellow),
+                    _ => ("ℹ Note", Color::Cyan),
+                };
+                self.block_break();
+                self.blank();
+                self.prefix.push(Prefix::Quote);
+                self.emit(vec![Span::styled(label.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD))]);
+                self.children(el, style);
+                self.flush();
+                self.prefix.pop();
+                self.blank();
+                Some(true)
+            }
+            "details" => {
+                self.block_break();
+                let heading = Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan);
+                let summary = el.children().filter_map(ElementRef::wrap).find(|e| e.value().name() == "summary");
+                let title: String = summary.map(|s| s.text().collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")).filter(|t| !t.is_empty()).unwrap_or_else(|| "Details".into());
+                self.emit(vec![Span::styled(format!("▾ {title}"), heading)]);
+                self.prefix.push(Prefix::Indent(2));
+                for c in el.children() {
+                    if ElementRef::wrap(c).is_some_and(|e| e.value().name() == "summary") { continue; }
+                    self.node(c, style);
+                }
+                self.flush();
+                self.prefix.pop();
+                self.blank();
+                Some(true)
+            }
+            "div" if has("trilium-tabs") => {
+                let tabs: Vec<ElementRef> = el.children().filter_map(ElementRef::wrap).collect();
+                let title_of = |t: &ElementRef| t.children().filter_map(ElementRef::wrap).find(|e| e.value().has_class("trilium-tab-title", scraper::CaseSensitivity::CaseSensitive))
+                    .map(|e| e.text().collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default();
+                self.block_break();
+                let strip = tabs.iter().map(|t| title_of(t)).collect::<Vec<_>>().join(" | ");
+                self.emit(vec![Span::styled(format!("[ {strip} ]"), dim)]);
+                for t in &tabs {
+                    self.emit(vec![Span::styled(format!("┌ {}", title_of(t)), Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan))]);
+                    self.prefix.push(Prefix::Indent(2));
+                    for c in t.children() {
+                        if ElementRef::wrap(c).is_some_and(|e| e.value().has_class("trilium-tab-title", scraper::CaseSensitivity::CaseSensitive)) { continue; }
+                        self.node(c, style);
+                    }
+                    self.flush();
+                    self.prefix.pop();
+                }
+                self.blank();
+                Some(true)
+            }
+            "div" if has("trilium-multicolumn") => {
+                self.block_break();
+                let mut first = true;
+                for c in el.children() {
+                    if !first {
+                        let w = self.avail();
+                        self.emit(vec![Span::styled("┄".repeat(w), dim)]);
+                    }
+                    first = false;
+                    self.node(c, style);
+                    self.flush();
+                }
+                self.blank();
+                Some(true)
+            }
+            "span" if has("math-tex") => {
+                let src: String = el.text().collect();
+                let text = crate::math::latex_to_text(&src);
+                let st = style.fg(Color::Cyan).add_modifier(Modifier::ITALIC);
+                if crate::math::is_display(&src) {
+                    self.block_break();
+                    self.runs.push((text, st));
+                    self.flush();
+                } else {
+                    self.runs.push((text, st));
+                }
+                Some(true)
+            }
+            "div" if has("footnote-section") => {
+                self.block_break();
+                self.blank();
+                let w = self.avail();
+                self.emit(vec![Span::styled(format!("── Footnotes {}", "─".repeat(w.saturating_sub(13))), dim)]);
+                self.children(el, style);
+                self.flush();
+                self.blank();
+                Some(true)
+            }
+            "span" if has("footnote-back-link") => Some(true),
+            "span" if has("bx") => {
+                let class = el.value().classes().find(|c| c.starts_with("bx-") && !matches!(*c, "bx-rotate-90" | "bx-rotate-180" | "bx-rotate-270" | "bx-flip-horizontal" | "bx-flip-vertical" | "bx-spin" | "bx-tada" | "bx-burst"))?;
+                let name = class.trim_start_matches("bx-");
+                let glyph = icon_glyph(name).map(str::to_string).unwrap_or_else(|| format!("[{name}]"));
+                self.runs.push((glyph, if icon_glyph(name).is_some() { style } else { dim }));
+                Some(true)
+            }
+            _ => None,
+        }
+    }
+
+    /// A bar-prefixed card: `icon title`, optional description, then the URL, all one followable link.
+    fn card(&mut self, icon: &str, title: &str, description: Option<&str>, url: &str) {
         self.flush();
         self.blank();
-        let attr = |n: &str| el.value().attr(n).map(|v| v.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|v| !v.is_empty());
         let id = self.links.len() as u32;
-        let title = attr("data-title").unwrap_or_else(|| url.to_string());
-        self.links.push(Link { href: url.to_string(), text: title.clone(), image: false });
+        self.links.push(Link { href: url.to_string(), text: title.to_string(), image: false });
         let link = Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED).underline_color(encode_id(id));
         self.prefix.push(Prefix::Quote);
-        self.runs.push(("🔗 ".to_string(), Style::default()));
-        self.runs.push((title, link.add_modifier(Modifier::BOLD)));
+        self.runs.push((icon.to_string(), Style::default()));
+        self.runs.push((title.to_string(), link.add_modifier(Modifier::BOLD)));
         self.flush();
-        if let Some(d) = attr("data-description") {
-            self.runs.push((d, Style::default()));
-            self.flush();
-        }
+        if let Some(d) = description { self.runs.push((d.to_string(), Style::default())); self.flush(); }
         self.runs.push((url.to_string(), link.fg(Color::DarkGray)));
         self.flush();
         self.prefix.pop();
         self.blank();
+    }
+
+    /// Link preview ("link-embed"): everything is in `data-*` attributes, so show title, description and URL as a card.
+    fn link_embed(&mut self, el: ElementRef, url: &str) {
+        let attr = |n: &str| el.value().attr(n).map(|v| v.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|v| !v.is_empty());
+        let title = attr("data-title").unwrap_or_else(|| url.to_string());
+        self.card("🔗 ", &title, attr("data-description").as_deref(), url);
     }
 
     /// Embedded note ("include note"): shown inline in a bar-prefixed box, nesting limited to 3.
@@ -353,6 +501,9 @@ impl Renderer<'_> {
         let text: String = el.text().collect();
         let st = Style::default().fg(Color::Yellow);
         let avail = self.avail();
+        if el.descendants().filter_map(ElementRef::wrap).any(|e| e.value().classes().any(|c| c == "language-mermaid")) {
+            self.emit(vec![Span::styled("mermaid diagram (source)", Style::default().fg(Color::DarkGray))]);
+        }
         for l in text.trim_end_matches('\n').split('\n') {
             let mut rest = l.replace('\t', "    ");
             loop {
@@ -571,5 +722,48 @@ mod tests {
         let out = plain(&render_html(&format!("<p>{}</p>", "x".repeat(100)), 30));
         assert!(out.lines().all(|l| l.width() <= 30));
         assert_eq!(out.replace('\n', "").len(), 100);
+    }
+
+    fn text_of(html: &str) -> String { plain(&render_html_full(html, 60, &|_| None).lines) }
+
+    #[test]
+    fn media_iframe_and_svg_show_markers() {
+        let r = render_html_full(r##"<figure class="media"><oembed url="https://www.youtube.com/watch?v=a"></oembed></figure><iframe src="https://player.vimeo.com/video/1"></iframe><svg><title>Logo</title></svg><svg><use/></svg>"##, 60, &|_| None);
+        let t = plain(&r.lines);
+        assert!(t.contains("Video · youtube.com") && t.contains("Embedded page · player.vimeo.com") && t.contains("[svg: Logo]") && t.contains("[svg]"), "{t}");
+        assert_eq!(r.links.iter().map(|l| l.href.as_str()).collect::<Vec<_>>(), ["https://www.youtube.com/watch?v=a", "https://player.vimeo.com/video/1"]);
+        assert_eq!(text_of(r#"<figure class="media"></figure><p>x</p>"#).trim(), "x");
+    }
+
+    #[test]
+    fn noscript_is_skipped() {
+        assert_eq!(text_of(r#"<p>a</p><noscript><img src="x.png"></noscript><p>b</p>"#), "a\n\nb");
+    }
+
+    #[test]
+    fn callouts_carry_their_type() {
+        assert!(text_of(r#"<aside class="admonition warning"><p>Careful</p></aside>"#).contains("⚠ Warning\n│ Careful") || text_of(r#"<aside class="admonition warning"><p>Careful</p></aside>"#).contains("⚠ Warning"));
+        assert!(text_of(r#"<aside class="admonition tip"><p>x</p></aside>"#).contains("Tip"));
+        assert!(text_of(r#"<aside class="admonition"><p>x</p></aside>"#).contains("Note"));
+    }
+
+    #[test]
+    fn collapsibles_tabs_and_columns_show_everything_with_structure() {
+        let t = text_of(r#"<details><summary>More</summary><p>body</p></details>"#);
+        assert!(t.contains("▾ More") && t.contains("  body"), "{t}");
+        let t = text_of(r#"<div class="trilium-tabs"><section class="trilium-tab"><p class="trilium-tab-title">One</p><div class="trilium-tab-panel"><p>p1</p></div></section><section class="trilium-tab"><p class="trilium-tab-title">Two</p><div class="trilium-tab-panel"><p>p2</p></div></section></div>"#);
+        assert!(t.contains("[ One | Two ]") && t.contains("┌ One") && t.contains("p2"), "{t}");
+        let t = text_of(r#"<div class="trilium-multicolumn"><div class="trilium-column"><p>L</p></div><div class="trilium-column"><p>R</p></div></div>"#);
+        assert!(t.contains('L') && t.contains('┄') && t.contains('R'), "{t}");
+    }
+
+    #[test]
+    fn math_footnotes_icons_and_mermaid() {
+        assert!(text_of(r#"<p>x <span class="math-tex">\(a^2\)</span></p>"#).contains("x a²"));
+        let t = text_of(r##"<p>c<span class="footnote-reference"><sup><a href="#fn1">[1]</a></sup></span></p><div class="footnote-section footnotes"><ol><li class="footnote-item"><span class="footnote-back-link"><sup><strong><a href="#fnref1">^</a></strong></sup></span><div class="footnote-content"><p>src</p></div></li></ol></div>"##);
+        assert!(t.contains("Footnotes") && t.contains("1. src") && !t.contains('^'), "{t}");
+        let t = text_of(r#"<p><span class="tn-icon bx bx-star"></span><span class="bx bx-nope"></span><span class="bx bx-rotate-90"></span></p>"#);
+        assert!(t.contains("★[nope]"), "{t}");
+        assert!(text_of(r#"<pre><code class="language-mermaid">graph TD</code></pre>"#).starts_with("mermaid diagram (source)\ngraph TD"));
     }
 }
