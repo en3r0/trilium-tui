@@ -433,6 +433,13 @@ impl RichSession {
     }
 
     pub fn html(&self) -> String { self.doc.html() }
+    /// Byte offset of the cursor in `html()`.
+    pub fn html_offset(&self) -> usize { self.doc.html_offset(self.cursor) }
+    /// Put the cursor where byte offset `off` of the note's HTML is.
+    pub fn place_at_html_offset(&mut self, off: usize) {
+        self.cursor = Doc::cursor_at_html_offset(&self.doc.html(), off);
+        self.anchor = None;
+    }
     pub fn dirty(&self) -> bool { self.version != self.saved_version }
     /// Mark the session as holding edits that are not stored yet (used when switching over from the source editor).
     pub fn mark_dirty(&mut self) { self.version = self.next_version; self.next_version += 1; }

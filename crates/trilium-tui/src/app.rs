@@ -2197,6 +2197,29 @@ mod tests {
     }
 
     #[test]
+    fn f2_keeps_the_cursor_where_it_was_in_both_directions() {
+        let (_d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<h2>Head</h2><p>one <strong>two</strong> three</p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(key(KeyCode::Down));
+        for _ in 0..6 { app.handle_key(key(KeyCode::Right)); } // "one tw|o"
+        app.handle_key(key(KeyCode::F(2)));
+        let Overlay::Edit(s) = &app.overlay else { panic!() };
+        let line = &s.buf.lines[s.buf.cur.0];
+        let before: String = line.chars().take(s.buf.cur.1).collect();
+        assert!(before.ends_with("<strong>tw"), "source cursor sits at the same spot: {before:?}");
+        // move in the source, come back: the in-place cursor follows
+        for _ in 0..2 { app.handle_key(key(KeyCode::Right)); } // past "o" and into "</strong>"
+        app.handle_key(key(KeyCode::F(2)));
+        let r = app.rich.as_ref().expect("back in place");
+        assert_eq!(r.html_offset(), "<h2>Head</h2><p>one <strong>two".len() , "an offset inside a tag lands at the end of the text");
+        app.handle_key(key(KeyCode::Char('!')));
+        assert_eq!(app.rich.as_ref().unwrap().html(), "<h2>Head</h2><p>one <strong>two!</strong> three</p>");
+    }
+
+    #[test]
     fn notes_that_cannot_be_edited_in_place_fall_back_to_the_source_editor_with_a_reason() {
         let (_d, mut app, ids) = fixture();
         app.db.set_note_content(&ids[0], "<p>a</p><!-- keep me --><p>b</p>").unwrap();

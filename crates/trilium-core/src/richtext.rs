@@ -648,6 +648,38 @@ impl Doc {
 
     pub fn block_text(&self, b: &Block) -> String { self.units(b).iter().map(|u| if u.br { '\n' } else if u.label.is_some() { ' ' } else { u.ch }).collect() }
 
+    /// Byte offset in `html()` of a cursor position (found by planting a private-use marker character there).
+    pub fn html_offset(&self, c: Cursor) -> usize {
+        const MARK: char = '\u{E000}';
+        let mut d = self.clone();
+        d.insert_text(c, &MARK.to_string());
+        d.html().find(MARK).unwrap_or(0)
+    }
+
+    /// The cursor for a byte offset in `html` (an offset inside a tag or entity moves to its end/start). Pair of `html_offset`.
+    pub fn cursor_at_html_offset(html: &str, off: usize) -> Cursor {
+        const MARK: char = '\u{E000}';
+        let mut off = off.min(html.len());
+        while !html.is_char_boundary(off) { off -= 1; }
+        let before = &html[..off];
+        if let (Some(lt), gt) = (before.rfind('<'), before.rfind('>')) {
+            if gt.is_none_or(|g| g < lt) { off = html[off..].find('>').map_or(html.len(), |e| off + e + 1); }
+        }
+        if let Some(amp) = html[..off].rfind('&') {
+            if !html[amp..off].contains([';', ' ', '<']) && off - amp < 12 { off = amp; }
+        }
+        let marked = format!("{}{MARK}{}", &html[..off], &html[off..]);
+        let (plain, with) = (Doc::parse(html), Doc::parse(&marked));
+        let (a, b) = (plain.outline(), with.outline());
+        for (i, bi) in b.blocks.iter().enumerate() {
+            if let Some(at) = with.block_text(&bi.block).chars().position(|ch| ch == MARK) {
+                // a marker between blocks makes a block of its own: the cursor then starts the block that follows
+                return if a.blocks.len() == b.blocks.len() { Cursor { block: i, off: at } } else { plain.clamp(Cursor { block: i, off: 0 }, &a) };
+            }
+        }
+        Cursor::default()
+    }
+
     pub fn clamp(&self, c: Cursor, ol: &Outline) -> Cursor {
         if ol.blocks.is_empty() { return Cursor::default(); }
         let block = c.block.min(ol.blocks.len() - 1);
@@ -1664,6 +1696,27 @@ mod tests {
         assert_eq!(d.html(), "<p>a<img src=\"x.png\" alt=\"pic\">Zb</p>");
         d.delete_back(at(0, 2));
         assert_eq!(d.html(), "<p>aZb</p>", "backspace after the image removes the image");
+    }
+
+    #[test]
+    fn cursor_positions_map_to_html_offsets_and_back() {
+        let h = "<h2>Head</h2>\r\n<p>one <strong>two</strong>&nbsp;x</p><table><tr><td>cell</td></tr></table><p>&nbsp;</p>";
+        let d = doc(h);
+        let ol = d.outline();
+        for (i, bi) in ol.blocks.iter().enumerate() {
+            for off in 0..=d.block_len(&bi.block) {
+                let c = at(i, off);
+                let o = d.html_offset(c);
+                let back = Doc::cursor_at_html_offset(h, o);
+                assert_eq!(d.html_offset(back), o, "{c:?} -> {o} -> {back:?}");
+            }
+        }
+        assert!(h[d.html_offset(at(1, 4))..].starts_with("<strong>"), "after \"one \" comes the bold tag");
+        // inside a tag or entity, and between blocks
+        assert_eq!(Doc::cursor_at_html_offset(h, 2), at(0, 0), "inside <h2> lands at its text start");
+        assert_eq!(Doc::cursor_at_html_offset(h, h.find("Head").unwrap() + 2), at(0, 2));
+        assert_eq!(Doc::cursor_at_html_offset(h, h.find("&nbsp;x").unwrap() + 3), at(1, 7), "inside an entity is before it");
+        assert_eq!(Doc::cursor_at_html_offset(h, h.find("\r\n").unwrap() + 1), at(1, 0), "between blocks starts the next block");
     }
 
     #[test]

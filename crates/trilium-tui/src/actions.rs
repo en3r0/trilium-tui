@@ -605,6 +605,10 @@ impl App {
                 Some(mut r) => {
                     r.base = base.clone();
                     if text != base { r.mark_dirty(); }
+                    let (row, col) = s.buf.cur;
+                    let off: usize = s.buf.lines.iter().take(row).map(|l| l.len() + 1).sum::<usize>()
+                        + s.buf.lines.get(row).map_or(0, |l| l.char_indices().nth(col).map_or(l.len(), |(i, _)| i));
+                    r.place_at_html_offset(off);
                     self.overlay = Overlay::None;
                     self.rich = Some(Box::new(r));
                 }
@@ -657,6 +661,10 @@ impl App {
                 let mut s = crate::edit_view::EditSession::new(&id, &title, &mime, &text);
                 s.base = r.base.clone();
                 if dirty { s.buf.set_stored(&r.base); }
+                // keep the cursor where it was: its line and column in the HTML
+                let before = &text[..r.html_offset().min(text.len())];
+                let row = before.matches('\n').count();
+                s.buf.place_cursor((row, before.rsplit('\n').next().map_or(0, |l| l.chars().count())));
                 self.overlay = Overlay::Edit(Box::new(s));
             }
             Outcome::Save | Outcome::SaveAndClose => {
