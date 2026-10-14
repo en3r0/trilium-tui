@@ -146,6 +146,9 @@ impl Renderer<'_> {
         if matches!(name, "section" | "figure") && el.value().classes().any(|c| c == "include-note") {
             if let Some(id) = el.value().attr("data-note-id") { self.include_note(id); return; }
         }
+        if name == "section" && el.value().classes().any(|c| c == "link-embed") {
+            if let Some(url) = el.value().attr("data-url").filter(|u| !u.is_empty()) { self.link_embed(el, url); return; }
+        }
         if is_block(name) { self.block_break(); }
         match name {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
@@ -205,6 +208,29 @@ impl Renderer<'_> {
             self.flush();
             if !matches!(name, "li" | "ul" | "ol") || (matches!(name, "ul" | "ol") && self.lists.is_empty()) { self.blank(); }
         }
+    }
+
+    /// Link preview ("link-embed"): everything is in `data-*` attributes, so show title, description and URL as a card.
+    fn link_embed(&mut self, el: ElementRef, url: &str) {
+        self.flush();
+        self.blank();
+        let attr = |n: &str| el.value().attr(n).map(|v| v.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|v| !v.is_empty());
+        let id = self.links.len() as u32;
+        let title = attr("data-title").unwrap_or_else(|| url.to_string());
+        self.links.push(Link { href: url.to_string(), text: title.clone(), image: false });
+        let link = Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED).underline_color(encode_id(id));
+        self.prefix.push(Prefix::Quote);
+        self.runs.push(("🔗 ".to_string(), Style::default()));
+        self.runs.push((title, link.add_modifier(Modifier::BOLD)));
+        self.flush();
+        if let Some(d) = attr("data-description") {
+            self.runs.push((d, Style::default()));
+            self.flush();
+        }
+        self.runs.push((url.to_string(), link.fg(Color::DarkGray)));
+        self.flush();
+        self.prefix.pop();
+        self.blank();
     }
 
     /// Embedded note ("include note"): shown inline in a bar-prefixed box, nesting limited to 3.
@@ -518,6 +544,16 @@ mod tests {
         let ids: Vec<Option<u32>> = r.span_links[0].clone();
         assert!(ids.contains(&Some(0)) && ids.contains(&Some(1)) && ids.contains(&None));
         assert!(r.lines[0].spans.iter().all(|s| s.style.underline_color.is_none()), "encoding must not leak into the display");
+    }
+
+    #[test]
+    fn link_embed_shows_title_description_and_url() {
+        let html = "<p>intro</p><section class=\"link-embed\" data-url=\"https://x.org/a?b=1\" data-embed-type=\"opengraph\" data-title=\"The Title\" data-description=\"Some text\">&nbsp;</section><p>after</p>";
+        let r = render_html_full(html, 60, &|_| None);
+        let text = plain(&r.lines);
+        assert!(text.contains("The Title") && text.contains("Some text") && text.contains("https://x.org/a?b=1") && text.contains("after"), "{text}");
+        assert_eq!(r.links.len(), 1);
+        assert_eq!(r.links[0].href, "https://x.org/a?b=1");
     }
 
     #[test]
