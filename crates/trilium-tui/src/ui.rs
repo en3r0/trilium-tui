@@ -145,7 +145,7 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
         }
         _ => (String::new(), String::new()),
     };
-    let editing = app.rich.as_ref().filter(|_| matches!(app.overlay, Overlay::None) || matches!(app.overlay, Overlay::Help));
+    let editing = app.rich.as_ref().filter(|_| !matches!(app.overlay, Overlay::Edit(_)));
     let block = match editing {
         Some(r) => {
             let accent = Style::default().fg(Color::Cyan);
@@ -163,9 +163,14 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
     let content_r = Rect { x: content_r.x + 1, width: content_r.width.saturating_sub(2), ..content_r };
     app.note_height = content_r.height as usize;
     let width = content_r.width as usize;
-    if app.rich.is_some() && matches!(app.overlay, Overlay::None | Overlay::Help) {
+    if app.rich.is_some() && !matches!(app.overlay, Overlay::Edit(_)) {
         if let Some(mut r) = app.rich.take() {
-            r.draw(f, content_r, &include_resolver(app));
+            app.image_picker();
+            let picker = app.picker.take().unwrap_or_else(ratatui_image::picker::Picker::halfblocks);
+            let mut imgs = std::mem::take(&mut app.imgs);
+            r.draw(f, content_r, &include_resolver(app), &mut crate::images::Host { imgs: &mut imgs, picker: &picker, db: &app.db });
+            app.imgs = imgs;
+            app.picker = Some(picker);
             app.rich = Some(r);
         }
         draw_attr_strip(f, app, attr_r);
@@ -183,19 +188,33 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
         draw_attr_strip(f, app, attr_r);
         return;
     }
-    let stale = app.view.as_ref().is_some_and(|v| v.cache.as_ref().is_none_or(|c| c.0 != width || c.1 != v.mode));
+    let stale = app.view.as_ref().is_some_and(|v| v.cache.as_ref().is_none_or(|c| c.0 != width || c.1 != v.mode) || v.img_gen != app.imgs.generation);
     if stale {
         let html_view = app.view.as_ref().is_some_and(|v| v.mode == ViewMode::Rendered && (matches!(v.kind, Kind::Html) || (matches!(v.kind, Kind::Code) && app.model.notes.get(&v.id).is_some_and(|n| crate::render::is_markdown_mime(&n.mime)))));
         if html_view {
             let r = build_html(app, width);
+            let (lines, span_links, places) = if app.imgs.enabled {
+                app.image_picker();
+                let picker = app.picker.take().unwrap_or_else(ratatui_image::picker::Picker::halfblocks);
+                let mut imgs = std::mem::take(&mut app.imgs);
+                let max_rows = (app.note_height * 2 / 3).clamp(4, 30);
+                let out = insert_image_rows(r.lines, r.span_links, &r.links, &mut crate::images::Host { imgs: &mut imgs, picker: &picker, db: &app.db }, width, max_rows);
+                app.imgs = imgs;
+                app.picker = Some(picker);
+                out
+            } else { (r.lines, r.span_links, vec![]) };
+            let gen_now = app.imgs.generation;
             if let Some(v) = app.view.as_mut() {
                 let keep = v.sel_link.filter(|i| *i < r.links.len());
-                v.links = r.links; v.link_spans = r.span_links; v.sel_link = keep;
-                v.cache = Some((width, v.mode, r.lines));
+                v.links = r.links; v.link_spans = span_links; v.sel_link = keep;
+                v.inline_images = places;
+                v.img_gen = gen_now;
+                v.cache = Some((width, v.mode, lines));
             }
         } else {
             let lines = build_lines(app, width);
-            if let Some(v) = app.view.as_mut() { v.links.clear(); v.link_spans.clear(); v.sel_link = None; v.cache = Some((width, v.mode, lines)); }
+            let gen_now = app.imgs.generation;
+            if let Some(v) = app.view.as_mut() { v.links.clear(); v.link_spans.clear(); v.sel_link = None; v.inline_images.clear(); v.img_gen = gen_now; v.cache = Some((width, v.mode, lines)); }
         }
     }
     let focused_note = app.focus == Focus::Note;
@@ -227,6 +246,7 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
             f.render_widget(Paragraph::new(visible), content_r);
         }
     }
+    draw_inline_pictures(f, app, content_r);
     if has_attrs { draw_attr_strip(f, app, attr_r); }
     if let Some(v) = app.view.as_ref() {
         let total = v.cache.as_ref().map_or(0, |c| c.2.len());
@@ -237,6 +257,61 @@ fn draw_note(f: &mut Frame, app: &mut App, area: Rect) {
             f.render_stateful_widget(sb, Rect { y: content_r.y, height: content_r.height, ..area }, &mut st);
         }
     }
+}
+
+/// Put pictures into the rows `insert_image_rows` reserved for them (only those that fit on screen entirely).
+fn draw_inline_pictures(f: &mut Frame, app: &mut App, content_r: Rect) {
+    let Some(v) = app.view.as_ref() else { return };
+    let h = content_r.height as usize;
+    let visible: Vec<crate::images::InlinePlace> = v.inline_images.iter().filter(|p| p.row >= v.scroll && p.row + p.rows <= v.scroll + h && p.x < content_r.width as usize).cloned().collect();
+    if visible.is_empty() || !app.imgs.enabled { return; }
+    let scroll = v.scroll;
+    app.image_picker();
+    let picker = app.picker.take().unwrap_or_else(ratatui_image::picker::Picker::halfblocks);
+    let mut imgs = std::mem::take(&mut app.imgs);
+    {
+        let mut host = crate::images::Host { imgs: &mut imgs, picker: &picker, db: &app.db };
+        for p in visible {
+            let r = Rect { x: content_r.x + p.x as u16, y: content_r.y + (p.row - scroll) as u16, width: p.cols.min(content_r.width as usize - p.x) as u16, height: p.rows as u16 };
+            if let Err(e) = crate::images::ImageHost::draw(&mut host, f, r, &p.src) {
+                f.render_widget(Paragraph::new(Line::from(Span::styled(format!("(can't show the picture: {e})"), Style::default().fg(Color::DarkGray)))), Rect { height: 1, ..r });
+            }
+        }
+    }
+    app.imgs = imgs;
+    app.picker = Some(picker);
+}
+
+/// Reading view: make room under every line that is only a picture, so it can be drawn there.
+/// Returns the new lines, their per-span link ids, and where each picture goes.
+fn insert_image_rows(lines: Vec<Line<'static>>, span_links: Vec<Vec<Option<u32>>>, links: &[render::Link], host: &mut dyn crate::images::ImageHost, width: usize, max_rows: usize)
+    -> (Vec<Line<'static>>, Vec<Vec<Option<u32>>>, Vec<crate::images::InlinePlace>)
+{
+    let (mut out, mut out_links, mut places) = (Vec::with_capacity(lines.len()), Vec::with_capacity(lines.len()), vec![]);
+    for (i, line) in lines.into_iter().enumerate() {
+        let ids = span_links.get(i).cloned().unwrap_or_default();
+        let img_spans: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| id.is_some_and(|id| links.get(id as usize).is_some_and(|l| l.image))).map(|(k, _)| k).collect();
+        // one picture on the line (its label may be several words), the rest only list/quote markers
+        let mut pic_ids: Vec<u32> = img_spans.iter().filter_map(|k| ids[*k]).collect();
+        pic_ids.dedup();
+        let only = pic_ids.len() == 1 && line.spans.iter().enumerate().all(|(k, sp)| img_spans.contains(&k) || sp.content.chars().all(|c| matches!(c, ' ' | '│' | '•' | '.' | '0'..='9')));
+        let target = only.then(|| {
+            let k = img_spans[0];
+            let src = links[pic_ids[0] as usize].href.trim().to_string();
+            let x: usize = line.spans[..k].iter().map(|sp| sp.content.width()).sum();
+            (src, x)
+        });
+        out.push(line);
+        out_links.push(ids);
+        if let Some((src, x)) = target {
+            if let Some(dims) = host.dims(&src) {
+                let (cols, rows) = crate::images::cells_for(dims, host.font(), width.saturating_sub(x).max(4), max_rows);
+                places.push(crate::images::InlinePlace { row: out.len(), rows, cols, x, src });
+                for _ in 0..rows { out.push(Line::default()); out_links.push(vec![]); }
+            }
+        }
+    }
+    (out, out_links, places)
 }
 
 fn draw_attr_strip(f: &mut Frame, app: &App, attr_r: Rect) {
@@ -338,7 +413,7 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 fn draw_picker(f: &mut Frame, app: &App, p: &Picker, area: Rect) {
     let r = centered(area, 80, (area.height * 2 / 3).max(8));
     f.render_widget(Clear, r);
-    let title = match p.kind { PickerKind::Jump => " Jump to note ", PickerKind::Search => " Search (Enter to run) ", PickerKind::Command => " Command palette ", PickerKind::CloneTo => " Clone to… (pick the parent) ", PickerKind::MoveTo => " Move to… (pick the parent) " };
+    let title = match p.kind { PickerKind::Jump => " Jump to note ", PickerKind::Search => " Search (Enter to run) ", PickerKind::Command => " Command palette ", PickerKind::CloneTo => " Clone to… (pick the parent) ", PickerKind::MoveTo => " Move to… (pick the parent) ", PickerKind::LinkNote => " Link to note " };
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Cyan)).title(title);
     let inner = block.inner(r);
     f.render_widget(block, r);
@@ -427,7 +502,9 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
         row("Ctrl+e".into(), "edit the stored HTML/Markdown/code source in the built-in editor (lossless)"),
         row("E".into(), "edit it in $VISUAL / $EDITOR instead"),
         row("(in place)".into(), "^S save · Esc close · ^Z/^Y undo · ^B bold · ^U underline · Alt+I (or ^I) italic · Alt+S strike · Alt+C code · Alt+H mark"),
-        row("(in place)".into(), "^K link · ^F find · F3 next · Alt+1..6 heading · Alt+0 paragraph · Alt+U/O/T bullet/numbered/to-do list · Alt+Q quote"),
+        row("(in place)".into(), "^K link (URL) · Alt+L link to a note · Alt+P picture from a file path or the clipboard · Ctrl+O / Ctrl+Enter follow the link or zoom the picture"),
+        row("Alt+V".into(), "show pictures inside notes (editor and reading view) / as [image: …] labels; remembered in config.json"),
+        row("(in place)".into(), "^F find · F3 next · Alt+1..6 heading · Alt+0 paragraph · Alt+U/O/T bullet/numbered/to-do list · Alt+Q quote"),
         row("(in place)".into(), "Tab / Shift+Tab nest / unnest list item · Ctrl+Space or click toggles a to-do · Shift/Alt+Enter line break · F2 HTML source"),
         row("(in place)".into(), "type `- `, `1. `, `# `, `> `, `[ ] ` at the start of a paragraph to start a list, heading, quote or to-do"),
         row("(source)".into(), "^S save · Esc close · ^F find · F3 next · ^G line · ^Z/^Y undo · ^K cut line · ^D dup line · F2 edit in place (HTML notes)"),

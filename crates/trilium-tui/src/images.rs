@@ -1,7 +1,10 @@
 //! Pictures: decoding, protocol selection (sixel / kitty / iTerm2 / half-blocks via ratatui-image) and the
 //! helpers to save or open files externally.
 use anyhow::{Context, Result, bail};
-use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
+use ratatui::{Frame, layout::Rect};
+use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
+use std::collections::HashMap;
+use trilium_core::db::Db;
 
 /// Largest side kept after decoding; bigger images are shrunk first (encoding cost grows with pixels).
 const MAX_SIDE: u32 = 2400;
@@ -170,5 +173,131 @@ mod tests {
         assert!(svg.error.as_deref().unwrap().contains("SVG"));
         let bad = Picture::load(&picker, "b", "b.png", "image/png", vec![1, 2, 3]);
         assert!(bad.error.as_deref().unwrap().contains("can't decode"));
+    }
+}
+
+// ---------------------------------------------------------------- inline pictures
+
+/// A picture drawn inside a note: `rows` screen rows starting at row `row`, `x` cells in from the left.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlinePlace { pub row: usize, pub rows: usize, pub cols: usize, pub x: usize, pub src: String }
+
+/// What a view needs from the picture cache while it lays out and draws a note.
+pub trait ImageHost {
+    fn enabled(&self) -> bool;
+    /// Size of one terminal cell in pixels.
+    fn font(&self) -> (u16, u16);
+    /// Pixel size of the picture behind an `<img src>`, if it is one we can show.
+    fn dims(&mut self, src: &str) -> Option<(u32, u32)>;
+    /// Draw the picture into `area`; `Err(reason)` when it can't be shown.
+    fn draw(&mut self, f: &mut Frame, area: Rect, src: &str) -> Result<(), String>;
+}
+
+/// Views that never show pictures inline.
+pub struct NoImages;
+impl ImageHost for NoImages {
+    fn enabled(&self) -> bool { false }
+    fn font(&self) -> (u16, u16) { (10, 20) }
+    fn dims(&mut self, _: &str) -> Option<(u32, u32)> { None }
+    fn draw(&mut self, _: &mut Frame, _: Rect, _: &str) -> Result<(), String> { Err("pictures are off".into()) }
+}
+
+/// Cells (columns, rows) a picture takes when fitted into the given space, never enlarged past its own size.
+pub fn cells_for(dims: (u32, u32), font: (u16, u16), max_cols: usize, max_rows: usize) -> (usize, usize) {
+    let (fw, fh) = (f64::from(font.0.max(1)), f64::from(font.1.max(1)));
+    let (wc, hc) = (f64::from(dims.0.max(1)) / fw, f64::from(dims.1.max(1)) / fh);
+    let scale = (max_cols.max(1) as f64 / wc).min(max_rows.max(1) as f64 / hc).min(1.0);
+    (((wc * scale).ceil() as usize).clamp(1, max_cols.max(1)), ((hc * scale).ceil() as usize).clamp(1, max_rows.max(1)))
+}
+
+/// The switch plus the decoded pictures (a few at a time; they are decoded when first drawn).
+#[derive(Default)]
+pub struct InlineImages {
+    pub enabled: bool,
+    /// bumped when the switch flips so cached note views are rebuilt
+    pub generation: u32,
+    dims: HashMap<String, Option<(u32, u32)>>,
+    pics: HashMap<String, std::result::Result<Box<Picture>, String>>,
+    order: Vec<String>,
+}
+
+impl InlineImages {
+    pub fn toggle(&mut self) -> bool {
+        self.enabled = !self.enabled;
+        self.generation = self.generation.wrapping_add(1);
+        self.enabled
+    }
+}
+
+pub struct Host<'a> { pub imgs: &'a mut InlineImages, pub picker: &'a Picker, pub db: &'a Db }
+
+const MAX_CACHED_PICTURES: usize = 16;
+
+impl ImageHost for Host<'_> {
+    fn enabled(&self) -> bool { self.imgs.enabled }
+
+    fn font(&self) -> (u16, u16) {
+        // half-blocks have one pixel across and two down per cell, whatever the real font: that is their natural size
+        if self.picker.protocol_type() == ratatui_image::picker::ProtocolType::Halfblocks { return (1, 2); }
+        let f = self.picker.font_size();
+        (f.width, f.height)
+    }
+
+    fn dims(&mut self, src: &str) -> Option<(u32, u32)> {
+        if let Some(d) = self.imgs.dims.get(src) { return *d; }
+        let d = match self.db.image_source_bytes(src) {
+            Ok(Some((_, mime, bytes))) if !mime.contains("svg") && bytes.len() <= MAX_BYTES => {
+                image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok())
+            }
+            _ => None,
+        };
+        if self.imgs.dims.len() > 2000 { self.imgs.dims.clear(); }
+        self.imgs.dims.insert(src.to_string(), d);
+        d
+    }
+
+    fn draw(&mut self, f: &mut Frame, area: Rect, src: &str) -> Result<(), String> {
+        if !self.imgs.pics.contains_key(src) {
+            let loaded = match self.db.image_source_bytes(src) {
+                Ok(Some((name, mime, bytes))) => {
+                    let p = Picture::load(self.picker, &name, &name, &mime, bytes);
+                    match p.error.clone() { Some(e) => Err(e), None => Ok(Box::new(p)) }
+                }
+                Ok(None) => Err("picture isn't in the replica".to_string()),
+                Err(e) => Err(format!("{e:#}")),
+            };
+            if self.imgs.order.len() >= MAX_CACHED_PICTURES {
+                let old = self.imgs.order.remove(0);
+                self.imgs.pics.remove(&old);
+            }
+            self.imgs.order.push(src.to_string());
+            self.imgs.pics.insert(src.to_string(), loaded);
+        }
+        match self.imgs.pics.get_mut(src) {
+            Some(Ok(p)) => match &mut p.proto {
+                Some(proto) => {
+                    f.render_stateful_widget(StatefulImage::default().resize(ratatui_image::Resize::Scale(None)), area, proto);
+                    match proto.last_encoding_result() { Some(Err(e)) => Err(format!("{e}")), _ => Ok(()) }
+                }
+                None => Err("no preview".into()),
+            },
+            Some(Err(e)) => Err(e.clone()),
+            None => Err("no preview".into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod inline_tests {
+    use super::*;
+
+    #[test]
+    fn pictures_are_fitted_into_the_space_without_being_enlarged() {
+        // 800x600 px with 10x20 px cells = 80x30 cells natural
+        assert_eq!(cells_for((800, 600), (10, 20), 60, 20), (54, 20));
+        assert_eq!(cells_for((800, 600), (10, 20), 200, 100), (80, 30), "never past its own size");
+        assert_eq!(cells_for((10, 10), (10, 20), 60, 20), (1, 1));
+        let (c, r) = cells_for((4000, 100), (10, 20), 40, 20);
+        assert!(c <= 40 && r >= 1);
     }
 }

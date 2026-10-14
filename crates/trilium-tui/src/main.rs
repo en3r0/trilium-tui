@@ -66,6 +66,8 @@ fn main() -> Result<()> {
         bail!("no database at {}\nCreate one with: TRILIUM_PASSWORD=... trilium-cli sync <server-url> {}", db_path.display(), db_path.display());
     }
     let mut app = App::new(&db_path, server)?;
+    app.imgs.enabled = cfg.inline_images;
+    app.persist_settings = true;
     if let Ok(Some(b)) = app.db.backup_daily(&db_path, 7) { app.status = format!("backup saved: {}", b.display()); }
     let (tx, rx) = channel();
     app.index_ready = false;

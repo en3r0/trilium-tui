@@ -50,6 +50,9 @@ pub struct NoteView {
     pub cal: Option<chrono::NaiveDate>,
     pub board: (usize, usize),
     pub cache: Option<(usize, ViewMode, Vec<Line<'static>>)>,
+    /// pictures drawn inline in the reading view, and the `InlineImages::generation` they were laid out for
+    pub inline_images: Vec<crate::images::InlinePlace>,
+    pub img_gen: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -64,7 +67,7 @@ pub struct Row {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PickerKind { Jump, Search, Command, CloneTo, MoveTo }
+pub enum PickerKind { Jump, Search, Command, CloneTo, MoveTo, LinkNote }
 
 pub struct Picker {
     pub kind: PickerKind,
@@ -85,6 +88,7 @@ pub enum PromptKind {
     Prefix(String),
     Attribute { note_id: String, relation: bool },
     AttrValue(String),
+    InsertImage,
     ExportPath(String),
     ExportOpmlPath(String),
     ExportMarkdownPath(String),
@@ -178,6 +182,12 @@ pub struct App {
     pub edit_area: Rect,
     /// the in-place editor, when the note pane is being edited
     pub rich: Option<Box<crate::rich_view::RichSession>>,
+    /// attachments created for pictures inserted while editing: (note, attachment); removed again when the editor closes without using them
+    pub new_attachments: Vec<(String, String)>,
+    /// pictures shown inside notes (Alt+V)
+    pub imgs: crate::images::InlineImages,
+    /// write settings changed in the app (the picture switch) to the config file; only the real program does
+    pub persist_settings: bool,
     pub help_scroll: std::cell::Cell<usize>,
     /// Inactive tabs live here; the active tab's state is in `view`/`history`/`hist_idx`.
     pub tabs: Vec<TabState>,
@@ -202,7 +212,7 @@ impl App {
             db, model, keymap: Keymap::load(), rows: vec![], sel: 0, tree_scroll: 0,
             expanded: HashSet::new(), show_archived: false, hoisted: ROOT.into(), focus: Focus::Tree,
             overlay: Overlay::None, history: vec![], hist_idx: 0, view: None, status: String::new(),
-            sync: SyncState::Off, sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), rich: None, help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
+            sync: SyncState::Off, sync_trigger: None, server_url, quit: false, tree_height: 20, note_height: 20, tree_area: Rect::default(), note_area: Rect::default(), pending_edit: None, last_input: Instant::now(), synced_once: false, want_today: false, edit_base: None, edit_area: Rect::default(), rich: None, new_attachments: vec![], imgs: Default::default(), persist_settings: false, help_scroll: std::cell::Cell::new(0), tabs: vec![TabState::default()], active_tab: 0, closed_tabs: vec![], searcher: None, panel_return: None, marked: vec![], picker: None, clipboard: None, index_ready: true,
         };
         app.expanded = app.model.children.values().flatten().filter(|b| b.expanded).map(|b| b.id.clone()).collect();
         app.rebuild_rows();
@@ -384,7 +394,7 @@ impl App {
         };
         let markdown = matches!(kind, Kind::Code) && crate::render::is_markdown_mime(&note.mime);
         let mode = if matches!(kind, Kind::Html) || markdown { ViewMode::Rendered } else { ViewMode::Source };
-        self.view = Some(NoteView { id: id.into(), kind, content, size, attrs, mode, scroll: 0, sel: 0, links: vec![], link_spans: vec![], sel_link: None, picture: None, cal: None, board: (0, 0), cache: None });
+        self.view = Some(NoteView { id: id.into(), kind, content, size, attrs, mode, scroll: 0, sel: 0, links: vec![], link_spans: vec![], sel_link: None, picture: None, cal: None, board: (0, 0), cache: None, inline_images: vec![], img_gen: self.imgs.generation });
         if push_history && self.history.get(self.hist_idx).map(String::as_str) != Some(id) {
             self.history.truncate(if self.history.is_empty() { 0 } else { self.hist_idx + 1 });
             self.history.push(id.into());
@@ -524,6 +534,13 @@ impl App {
         }
     }
 
+    /// Alt+V: pictures inside notes instead of `[image: …]` labels (remembered in the config file).
+    pub fn toggle_inline_images(&mut self) {
+        let on = self.imgs.toggle();
+        let saved = !self.persist_settings || crate::config::config_path().is_some_and(|p| crate::config::save_inline_images_to(&p, on).is_ok());
+        self.status = format!("inline pictures {}{}", if on { "on" } else { "off" }, if saved { "" } else { " (couldn't save the setting)" });
+    }
+
     pub fn toggle_source(&mut self) {
         let md = self.view.as_ref().is_some_and(|v| matches!(v.kind, Kind::Code) && self.model.notes.get(&v.id).is_some_and(|n| crate::render::is_markdown_mime(&n.mime)));
         if let Some(v) = self.view.as_mut() {
@@ -642,7 +659,7 @@ impl App {
         recent_ids.retain(|i| seen.insert(i.clone()) && self.model.notes.contains_key(i));
         recent_ids.truncate(50);
         let results = match kind {
-            PickerKind::Jump | PickerKind::CloneTo | PickerKind::MoveTo => recent_ids.clone(),
+            PickerKind::Jump | PickerKind::CloneTo | PickerKind::MoveTo | PickerKind::LinkNote => recent_ids.clone(),
             PickerKind::Command => Action::ALL.iter().map(|(a, _)| format!("{a:?}")).collect(),
             PickerKind::Search => vec![],
         };
@@ -735,6 +752,7 @@ impl App {
         }
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
         match (ev.code, ctrl) {
+            (KeyCode::Char('v'), false) if ev.modifiers.contains(KeyModifiers::ALT) => { self.toggle_inline_images(); return; }
             (KeyCode::Char('q'), false) | (KeyCode::Char('q'), true) => { self.quit = true; return; }
             (KeyCode::Char('c'), true) => { self.status = "Ctrl+C copies notes in the tree; q quits".into(); return; }
             (KeyCode::Char('/'), false) => { self.open_picker(PickerKind::Search); return; }
@@ -893,6 +911,7 @@ impl App {
             Action::OpenInBrowser => self.open_in_browser(),
             Action::EditContent => self.request_edit(),
             Action::EditSource => self.request_edit_source(),
+            Action::ToggleInlineImages => self.toggle_inline_images(),
             Action::EditExternal => self.request_edit_external(),
             Action::Quit => self.quit = true,
             Action::OpenToday => self.open_today(),
@@ -943,6 +962,9 @@ impl App {
                     self.overlay = Overlay::None;
                     if matches!(kind, PickerKind::CloneTo | PickerKind::MoveTo) {
                         self.apply_to_target(kind, &targets, &id);
+                    } else if kind == PickerKind::LinkNote {
+                        let title = self.model.title_of(&id).to_string();
+                        if let Some(r) = self.rich.as_mut() { r.link_note(&id, &title); }
                     } else if kind == PickerKind::Command {
                         if let Some((a, _)) = Action::ALL.iter().find(|(a, _)| format!("{a:?}") == id) { self.run_action(*a); }
                     } else {
@@ -1025,8 +1047,22 @@ mod tests {
         app.overlay = Overlay::None;
         app.run_action(Action::EditContent);
         assert!(app.rich.is_some(), "protected notes edit in place too once unlocked");
+        // a picture added to a protected note is stored encrypted, and removed again when the edit is discarded
+        let pic = png_file(_d.path(), "secret.png");
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT));
+        typed(&mut app, &pic.display().to_string());
+        app.handle_key(key(KeyCode::Enter));
+        let atts = app.db.attachments(&alpha).unwrap();
+        assert_eq!(atts.len(), 1, "{}", app.status);
+        assert!(app.db.attachment_protected(&atts[0].id));
+        let raw: rusqlite::types::Value = app.db.conn.query_row("SELECT b.content FROM attachments a JOIN blobs b ON b.blobId=a.blobId WHERE a.attachmentId=?", [&atts[0].id], |r| r.get(0)).unwrap();
+        let raw = match raw { rusqlite::types::Value::Text(t) => t.into_bytes(), rusqlite::types::Value::Blob(b) => b, v => panic!("{v:?}") };
+        assert!(!raw.starts_with(&[0x89, b'P', b'N', b'G']) && !raw.starts_with(b"iVBOR"), "the stored bytes are encrypted");
+        assert_eq!(app.db.attachment_bytes(&atts[0].id).unwrap().unwrap().get(1..4), Some(&b"PNG"[..]), "and decrypt back to the picture");
         app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Char('d')));
         assert!(app.rich.is_none());
+        assert!(app.db.attachments(&alpha).unwrap().is_empty());
         // locking while an in-place edit holds unsaved text keeps that text, encrypted, and closes the editor
         app.run_action(Action::EditContent);
         app.handle_key(key(KeyCode::Char('Z')));
@@ -2229,6 +2265,188 @@ mod tests {
         assert_eq!(r.html_offset(), "<h2>Head</h2><p>one <strong>two".len() , "an offset inside a tag lands at the end of the text");
         app.handle_key(key(KeyCode::Char('!')));
         assert_eq!(app.rich.as_ref().unwrap().html(), "<h2>Head</h2><p>one <strong>two!</strong> three</p>");
+    }
+
+    fn png_file(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        img.save(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn alt_l_links_to_a_picked_note_and_ctrl_o_follows_it() {
+        let (_d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<p>see  here</p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.handle_key(key(KeyCode::Char('e')));
+        for _ in 0..4 { app.handle_key(key(KeyCode::Right)); }
+        app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::ALT));
+        assert!(matches!(&app.overlay, Overlay::Picker(p) if p.kind == PickerKind::LinkNote));
+        typed(&mut app, "needle");
+        app.handle_key(key(KeyCode::Enter));
+        let want = format!("<p>see <a class=\"reference-link\" href=\"#root/{}\">Epsilon needle</a> here</p>", ids[4]);
+        assert_eq!(app.rich.as_ref().unwrap().html(), want);
+        assert!(matches!(app.overlay, Overlay::None) && app.rich.is_some(), "still editing");
+        // a dirty editor does not walk away on Ctrl+O
+        app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(app.rich.is_some() && app.status.contains("save first"), "{}", app.status);
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(app.rich.is_none(), "followed the link");
+        assert_eq!(app.view.as_ref().unwrap().id, ids[4]);
+        // selection + Alt+L links the selected text instead
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        for _ in 0..5 { app.handle_key(key(KeyCode::Right)); }
+        for _ in 0..3 { app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT)); }
+        app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::ALT));
+        typed(&mut app, "Alpha");
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.rich.as_ref().unwrap().html(), format!("<p>find <a href=\"#root/{}\">the</a> haystack</p>", ids[0]));
+    }
+
+    #[test]
+    fn ctrl_k_without_a_selection_inserts_the_address_as_a_link() {
+        let (_d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<p>go </p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(key(KeyCode::End));
+        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        typed(&mut app, "https://example.org/a?b=1&c=2");
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.rich.as_ref().unwrap().html(), "<p>go <a href=\"https://example.org/a?b=1&amp;c=2\">https://example.org/a?b=1&amp;c=2</a></p>");
+    }
+
+    #[test]
+    fn alt_p_stores_a_picture_as_an_attachment_and_cleans_up_when_discarded() {
+        let (d, mut app, ids) = fixture();
+        let pic = png_file(d.path(), "my pic.png");
+        app.db.set_note_content(&ids[0], "<p>text</p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(key(KeyCode::End));
+        // a file that isn't a picture is refused
+        std::fs::write(d.path().join("x.txt"), "hello").unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT));
+        assert!(matches!(&app.overlay, Overlay::Prompt(_)));
+        typed(&mut app, &d.path().join("x.txt").display().to_string());
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.status.contains("isn't a PNG"), "{}", app.status);
+        assert!(app.db.attachments(&ids[0]).unwrap().is_empty());
+        // a dropped path with quotes and escaped spaces works
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT));
+        app.handle_paste(&format!("'{}'", pic.display()));
+        app.handle_key(key(KeyCode::Enter));
+        let atts = app.db.attachments(&ids[0]).unwrap();
+        assert_eq!(atts.len(), 1, "{}", app.status);
+        assert_eq!((atts[0].role.as_str(), atts[0].mime.as_str(), atts[0].title.as_str()), ("image", "image/png", "my pic.png"));
+        let html = app.rich.as_ref().unwrap().html();
+        assert_eq!(html, format!("<p>text</p><figure class=\"image\"><img src=\"api/attachments/{}/image/my%20pic.png\"></figure><p>&nbsp;</p>", atts[0].id));
+        assert!(app.db.image_source_bytes(&format!("api/attachments/{}/image/my%20pic.png", atts[0].id)).unwrap().is_some(), "the picture resolves like any other");
+        // typing continues below the picture; discarding removes the attachment again
+        app.handle_key(key(KeyCode::Char('x')));
+        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Char('d')));
+        assert!(app.rich.is_none());
+        assert!(app.db.attachments(&ids[0]).unwrap().is_empty(), "nothing is left behind");
+        assert_eq!(app.db.note_content(&ids[0]).unwrap().unwrap(), "<p>text</p>");
+        // saved: it stays; and removing the picture before the final save drops it
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT));
+        typed(&mut app, &pic.display().to_string());
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.rich.is_none());
+        assert_eq!(app.db.attachments(&ids[0]).unwrap().len(), 1);
+        assert!(app.db.note_content(&ids[0]).unwrap().unwrap().contains("<figure class=\"image\">"));
+    }
+
+    #[test]
+    fn ctrl_o_on_a_picture_opens_the_viewer() {
+        let (d, mut app, ids) = fixture();
+        let pic = png_file(d.path(), "p.png");
+        app.db.set_note_content(&ids[0], "<p>x</p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT));
+        typed(&mut app, &pic.display().to_string());
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Up));
+        app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(matches!(&app.overlay, Overlay::Image(p) if p.dims == (8, 4)), "{}", app.status);
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.rich.is_some());
+    }
+
+    fn note_with_picture(app: &mut App, id: &str) -> String {
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(120, 80, image::Rgb([220, 40, 40]))).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let att = app.db.add_attachment(id, "red.png", "image/png", "image", &png).unwrap();
+        app.db.set_note_content(id, &format!("<p>before</p><figure class=\"image\"><img src=\"api/attachments/{att}/image/red.png\"></figure><p>after</p>")).unwrap();
+        app.reload(); app.reveal(id);
+        att
+    }
+
+    fn half_blocks(app: &mut App, w: u16, h: u16) -> usize {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| crate::ui::draw(f, app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        // the test picture is a flat red; half-block cells carry it as colour
+        (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|(x, y)| buf[(*x, *y)].bg == ratatui::style::Color::Rgb(220, 40, 40)).count()
+    }
+
+    #[test]
+    fn alt_v_shows_pictures_inline_in_the_editor_and_the_reading_view() {
+        let (_d, mut app, ids) = fixture();
+        note_with_picture(&mut app, &ids[0]);
+        let alt_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT);
+        // reading view: labels by default
+        let shown = screen(&mut app, 100, 40);
+        assert!(shown.contains("[image: red.png]") && half_blocks(&mut app, 100, 40) == 0, "{shown}");
+        app.handle_key(alt_v);
+        assert!(app.imgs.enabled && app.status.contains("on"), "{}", app.status);
+        let cells = half_blocks(&mut app, 100, 40);
+        assert!(cells > 20, "the picture is drawn ({cells} cells)");
+        assert!(screen(&mut app, 100, 40).contains("[image: red.png]"), "the label stays as a caption (it is also what ] selects and Enter zooms)");
+        // the lines after the picture are still there, below it
+        let shown = screen(&mut app, 100, 40);
+        let (label_row, after_row) = (shown.lines().position(|l| l.contains("before")).unwrap(), shown.lines().position(|l| l.contains("after")).unwrap());
+        assert!(after_row > label_row + 5, "text continues below the picture rows: {label_row} {after_row}");
+        // editor: the same switch
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        let cells_edit = half_blocks(&mut app, 100, 40);
+        assert!(cells_edit > 20, "the editor shows it too ({cells_edit})");
+        let shown = screen(&mut app, 100, 40);
+        assert!(shown.contains("[image: red.png]"), "a caption row stays where the cursor can sit: {shown}");
+        app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
+        assert!(!app.imgs.enabled);
+        assert_eq!(half_blocks(&mut app, 100, 40), 0, "off again: back to labels");
+        assert!(screen(&mut app, 100, 40).contains("[image: red.png]"));
+        // editing around the picture, with pictures on, changes only the text
+        app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
+        app.handle_key(key(KeyCode::Down)); app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Char('!')));
+        assert!(app.rich.as_ref().unwrap().html().ends_with("</figure><p>!after</p>"));
+        assert!(half_blocks(&mut app, 100, 40) > 20);
+    }
+
+    #[test]
+    fn pictures_that_cannot_be_shown_stay_labels() {
+        let (_d, mut app, ids) = fixture();
+        app.db.set_note_content(&ids[0], "<p>x</p><p><img src=\"https://example.org/remote.png\"></p><p><img src=\"api/attachments/nope/image/x.png\"></p>").unwrap();
+        app.reload(); app.reveal(&ids[0]);
+        app.imgs.enabled = true;
+        let shown = screen(&mut app, 100, 30);
+        assert!(shown.contains("[image: remote.png]") && shown.contains("[image: x.png]"), "{shown}");
+        app.focus = Focus::Note;
+        app.handle_key(key(KeyCode::Char('e')));
+        let shown = screen(&mut app, 100, 30);
+        assert!(shown.contains("[image: remote.png]") && half_blocks(&mut app, 100, 30) == 0, "{shown}");
     }
 
     #[test]

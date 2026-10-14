@@ -1,5 +1,6 @@
 //! In-place editing of a text note: the note pane itself becomes the editor (no tags on screen).
 //! The model is `trilium_core::richtext::Doc`; this file owns the layout (wrapping + cursor <-> screen mapping), keys and drawing.
+use crate::images::{ImageHost, InlinePlace, NoImages, cells_for};
 use crate::render;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
@@ -23,7 +24,7 @@ enum Mode { Edit, Link, Find, ConfirmClose }
 enum Last { Other, Typing, Delete }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Outcome { None, Save, Close, SaveAndClose, ToSource }
+pub enum Outcome { None, Save, Close, SaveAndClose, ToSource, PickNote, PickImage, ToggleImages, Follow(rt::LinkTarget) }
 
 struct Snap { nodes: Vec<Node>, cursor: Cursor, version: u64 }
 
@@ -63,6 +64,9 @@ struct Layout {
     width: usize,
     /// opaque elements were drawn for real (false: placeholders, good enough for cursor movement)
     complete: bool,
+    /// pictures shown inline when this was laid out, and where
+    inline: bool,
+    images: Vec<InlinePlace>,
 }
 
 pub struct RichSession {
@@ -83,6 +87,8 @@ pub struct RichSession {
     pending: Vec<(u16, bool)>,
     mode: Mode,
     input: String,
+    /// the link prompt inserts a new link (text = the address) instead of linking the selection
+    link_insert: bool,
     last_find: String,
     clip: String,
     pub msg: String,
@@ -237,9 +243,9 @@ fn natural_width(units: &[Unit], pre: bool) -> usize {
 }
 
 impl Layout {
-    fn build(doc: &Doc, ol: &Outline, width: usize, opaque: &mut HashMap<(String, usize), Vec<Line<'static>>>, resolver: Option<Resolver>) -> Layout {
+    fn build(doc: &Doc, ol: &Outline, width: usize, opaque: &mut HashMap<(String, usize), Vec<Line<'static>>>, resolver: Option<Resolver>, host: &mut dyn ImageHost, max_rows: usize) -> Layout {
         let dim = Style::default().fg(Color::DarkGray);
-        let mut lay = Layout { rows: vec![], units: vec![], pre: vec![], styles: vec![], first_row: vec![0; ol.blocks.len()], width, complete: resolver.is_some() };
+        let mut lay = Layout { rows: vec![], units: vec![], pre: vec![], styles: vec![], first_row: vec![0; ol.blocks.len()], width, complete: resolver.is_some(), inline: host.enabled(), images: vec![] };
         for bi in &ol.blocks {
             lay.units.push(doc.units(&bi.block));
             lay.pre.push(bi.block.pre);
@@ -260,7 +266,20 @@ impl Layout {
             match item {
                 Item::Block(i) => {
                     lay.first_row[*i] = lay.rows.len();
-                    for l in block_lines(*i, &lay.units[*i], lay.pre[*i], &ol.blocks[*i], width, dim) { lay.rows.push(RowKind::Text(l)); }
+                    let lines = block_lines(*i, &lay.units[*i], lay.pre[*i], &ol.blocks[*i], width, dim);
+                    let pw = lines.first().map_or(0, |l| l.pw);
+                    for l in lines { lay.rows.push(RowKind::Text(l)); }
+                    // a block that is nothing but a picture gets room to show it (the caption row above stays the cursor's row)
+                    let only_src = (lay.units[*i].len() == 1).then(|| lay.units[*i][0].src.clone()).flatten();
+                    if let Some(src) = only_src {
+                        if host.enabled() {
+                            if let Some(dims) = host.dims(&src) {
+                                let (cols, rows) = cells_for(dims, host.font(), width.saturating_sub(pw).max(4), max_rows);
+                                lay.images.push(InlinePlace { row: lay.rows.len(), rows, cols, x: pw, src });
+                                for _ in 0..rows { lay.rows.push(RowKind::Plain { prefix: vec![], line: Line::default() }); }
+                            }
+                        }
+                    }
                 }
                 Item::Opaque { html, anc } => {
                     let mut prefix = vec![];
@@ -427,7 +446,7 @@ impl RichSession {
         Some(RichSession {
             note_id: note_id.into(), title: title.into(), doc, cursor: Cursor::default(), anchor: None, goal: None,
             version: 0, saved_version: 0, next_version: 1, undo: vec![], redo: vec![], last: Last::Other, last_end: None, pending: vec![],
-            mode: Mode::Edit, input: String::new(), last_find: String::new(), clip: String::new(), msg: String::new(), base: html.to_string(), force: false,
+            mode: Mode::Edit, input: String::new(), link_insert: false, last_find: String::new(), clip: String::new(), msg: String::new(), base: html.to_string(), force: false,
             layout: None, opaque: HashMap::new(), width: 80, height: 20, scroll: 0, followed: (Cursor::default(), 0, 0, 0), area: Rect::default(), dragging: false,
         })
     }
@@ -463,17 +482,24 @@ impl RichSession {
 
     // ---------------------------------------------------------------- layout & positions
 
-    fn ensure_layout(&mut self, resolver: Option<Resolver>) {
-        let stale = match &self.layout { None => true, Some(l) => l.width != self.width || (resolver.is_some() && !l.complete) };
+    fn ensure_layout(&mut self, resolver: Option<Resolver>, host: Option<&mut dyn ImageHost>) {
+        let mut none = NoImages;
+        let (host, have): (&mut dyn ImageHost, bool) = match host { Some(h) => (h, true), None => (&mut none, false) };
+        let want_inline = have.then(|| host.enabled());
+        let stale = match &self.layout {
+            None => true,
+            Some(l) => l.width != self.width || (resolver.is_some() && !l.complete) || want_inline.is_some_and(|w| w != l.inline),
+        };
         if !stale { return; }
         let ol = self.doc.outline();
-        self.layout = Some(Layout::build(&self.doc, &ol, self.width, &mut self.opaque, resolver));
+        let max_rows = (self.height * 2 / 3).clamp(4, 30);
+        self.layout = Some(Layout::build(&self.doc, &ol, self.width, &mut self.opaque, resolver, host, max_rows));
         self.cursor = self.doc.clamp(self.cursor, &ol);
         if let Some(a) = self.anchor { self.anchor = Some(self.doc.clamp(a, &ol)); }
     }
 
     fn lay(&mut self) -> &Layout {
-        self.ensure_layout(None);
+        self.ensure_layout(None, None);
         self.layout.as_ref().unwrap()
     }
 
@@ -696,10 +722,26 @@ impl RichSession {
             self.cursor = e;
             self.input = h;
         } else {
-            self.msg = "select the text to turn into a link first".into();
+            self.input.clear();
+            self.link_insert = true;
+            self.mode = Mode::Link;
             return;
         }
+        self.link_insert = false;
         self.mode = Mode::Link;
+    }
+
+    /// Link to a note: the selection becomes a link to it, otherwise its title is inserted as a note link.
+    pub fn link_note(&mut self, id: &str, title: &str) {
+        let href = format!("#root/{id}");
+        match self.sel() {
+            Some((a, b)) => self.mutate(Last::Other, |d, _, _| { d.set_link(a, b, Some(&href)); b }),
+            None => self.mutate(Last::Other, |d, c, _| d.insert_note_link(c, id, title)),
+        }
+    }
+
+    pub fn insert_image(&mut self, src: &str) {
+        self.mutate(Last::Other, |d, c, a| { let c = Self::delete_selection_in(d, c, a); d.insert_image(c, src) });
     }
 
     // ---------------------------------------------------------------- keys
@@ -734,7 +776,9 @@ impl RichSession {
                     KeyCode::Esc => self.mode = Mode::Edit,
                     KeyCode::Enter => {
                         let href = self.input.trim().to_string();
-                        if let Some((a, b)) = self.sel() {
+                        if self.link_insert {
+                            if !href.is_empty() { self.mutate(Last::Other, |d, c, _| d.insert_link_text(c, &href, &href)); }
+                        } else if let Some((a, b)) = self.sel() {
                             self.mutate(Last::Other, |d, _, _| { d.set_link(a, b, (!href.is_empty()).then_some(href.as_str())); b });
                         }
                         self.mode = Mode::Edit;
@@ -766,6 +810,12 @@ impl RichSession {
             (KeyCode::Char('i'), true) => self.toggle(mark::ITALIC, "italic"),
             (KeyCode::Char('u'), true) => self.toggle(mark::UNDERLINE, "underline"),
             (KeyCode::Char('k'), true) => self.open_link_prompt(),
+            (KeyCode::Char('o'), true) | (KeyCode::Enter, true) => {
+                return match self.doc.target_at(self.cursor) {
+                    Some(t) => Outcome::Follow(t),
+                    None => { self.msg = "no link or picture at the cursor".into(); Outcome::None }
+                };
+            }
             (KeyCode::Char('f'), true) => { self.mode = Mode::Find; self.input = self.sel().map(|(a, b)| self.doc.selected_text(a, b)).filter(|s| !s.contains('\n')).unwrap_or_else(|| self.last_find.clone()); }
             (KeyCode::F(3), _) => self.find_next(),
             (KeyCode::Char(' '), true) => { let c = self.cursor; self.mutate(Last::Other, |d, _, _| { d.toggle_checkbox(c); c }); }
@@ -803,6 +853,9 @@ impl RichSession {
                 'o' => self.list(ListKind::Numbered),
                 't' => self.list(ListKind::Todo),
                 'q' => self.mutate(Last::Other, |d, c, _| { d.quote(c); c }),
+                'l' => return Outcome::PickNote,
+                'p' => return Outcome::PickImage,
+                'v' => return Outcome::ToggleImages,
                 'i' => self.toggle(mark::ITALIC, "italic"),
                 's' => self.toggle(mark::STRIKE, "strikethrough"),
                 'c' => self.toggle(mark::CODE, "code"),
@@ -865,14 +918,14 @@ impl RichSession {
 
     // ---------------------------------------------------------------- drawing
 
-    pub fn draw(&mut self, f: &mut Frame, area: Rect, resolver: Resolver) {
+    pub fn draw(&mut self, f: &mut Frame, area: Rect, resolver: Resolver, host: &mut dyn ImageHost) {
         let accent = Style::default().fg(Color::Cyan);
         let dim = Style::default().fg(Color::DarkGray);
         let [text_r, foot_r] = RLayout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
         self.area = text_r;
         self.width = (text_r.width as usize).max(8);
         self.height = text_r.height as usize;
-        self.ensure_layout(Some(resolver));
+        self.ensure_layout(Some(resolver), Some(&mut *host));
         let lay = self.layout.as_ref().unwrap();
         let (crow, ccol) = lay.locate(self.cursor);
         // keep the cursor in view only when it (or the window) moved, so the mouse wheel can scroll away from it
@@ -930,6 +983,14 @@ impl RichSession {
             }
         }
         f.render_widget(Paragraph::new(out), text_r);
+        // pictures go over the rows reserved for them; one that is only partly on screen waits until it fits
+        for pl in &lay.images {
+            if pl.row < self.scroll || pl.row + pl.rows > self.scroll + self.height || pl.x >= text_r.width as usize { continue; }
+            let r = Rect { x: text_r.x + pl.x as u16, y: text_r.y + (pl.row - self.scroll) as u16, width: pl.cols.min(text_r.width as usize - pl.x) as u16, height: pl.rows as u16 };
+            if let Err(e) = host.draw(f, r, &pl.src) {
+                f.render_widget(Paragraph::new(Line::from(Span::styled(format!("(can't show the picture: {e})"), dim))), Rect { height: 1, ..r });
+            }
+        }
 
         let key = |k: &str, what: &str| -> Vec<Span<'static>> { vec![Span::styled(k.to_string(), accent), Span::styled(format!(" {what}  "), dim)] };
         let foot = match self.mode {
@@ -939,7 +1000,7 @@ impl RichSession {
             Mode::Edit if !self.msg.is_empty() => Line::from(vec![Span::styled(format!(" {}", self.msg), accent)]),
             Mode::Edit => {
                 let mut v = vec![Span::raw(" ")];
-                for (k, w) in [("^S", "save"), ("Esc", "close"), ("^B ^U Alt+I", "format"), ("^K", "link"), ("F2", "source"), ("F1", "help")] { v.extend(key(k, w)); }
+                for (k, w) in [("F1", "help"), ("^S", "save"), ("Esc", "close"), ("^B ^U Alt+I", "format"), ("^K/Alt+L", "link"), ("Alt+P", "image"), ("F2", "source")] { v.extend(key(k, w)); }
                 Line::from(v)
             }
         };
@@ -965,7 +1026,7 @@ mod tests {
     fn session(h: &str) -> RichSession { RichSession::new("n", "T", h).unwrap() }
     fn screen(s: &mut RichSession, w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
-        t.draw(|f| s.draw(f, f.area(), &|_| None)).unwrap();
+        t.draw(|f| s.draw(f, f.area(), &|_| None, &mut NoImages)).unwrap();
         let buf = t.backend().buffer().clone();
         (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string()).collect::<Vec<_>>().join("\n")
     }
@@ -1170,6 +1231,52 @@ mod tests {
         assert!(s.html().contains("<td><br>x3</td>"), "Enter in a cell is a line break: {}", s.html());
     }
 
+    /// A host that knows one picture and records where it was asked to draw it.
+    struct FakeHost { on: bool, drawn: Vec<Rect> }
+    impl ImageHost for FakeHost {
+        fn enabled(&self) -> bool { self.on }
+        fn font(&self) -> (u16, u16) { (10, 20) }
+        fn dims(&mut self, src: &str) -> Option<(u32, u32)> { (src == "pic.png").then_some((200, 100)) } // 20 x 5 cells
+        fn draw(&mut self, _: &mut Frame, area: Rect, _: &str) -> Result<(), String> { self.drawn.push(area); Ok(()) }
+    }
+
+    #[test]
+    fn inline_pictures_reserve_rows_that_the_cursor_skips() {
+        let html = "<p>top</p><figure class=\"image\"><img src=\"pic.png\"></figure><p>bottom</p><p><img src=\"other.png\"></p>";
+        let mut s = session(html);
+        let mut host = FakeHost { on: true, drawn: vec![] };
+        let mut t = Terminal::new(TestBackend::new(40, 20)).unwrap();
+        t.draw(|f| s.draw(f, f.area(), &|_| None, &mut host)).unwrap();
+        let shown: Vec<String> = { let b = t.backend().buffer().clone(); (0..20).map(|y| (0..40).map(|x| b[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string()).collect() };
+        assert_eq!(host.drawn.len(), 1, "only the picture the host knows is drawn (the other stays a label)");
+        let r = host.drawn[0];
+        assert_eq!((r.width, r.height), (20, 5));
+        assert_eq!(shown[r.y as usize - 1], "[image: pic.png]", "the caption sits right above: {shown:?}");
+        let bottom = shown.iter().position(|l| l == "bottom").unwrap();
+        assert!(bottom as u16 >= r.y + r.height, "text continues below the reserved rows");
+        assert!(shown.iter().any(|l| l == "[image: other.png]"));
+        // Up/Down never rest on the filler rows: top -> caption -> bottom
+        press(&mut s, KeyCode::Down);
+        assert_eq!(s.cursor.block, 1);
+        press(&mut s, KeyCode::Down);
+        assert_eq!(s.cursor.block, 2);
+        // a picture taller than what is left of the window waits
+        let mut small = session(html);
+        let mut host = FakeHost { on: true, drawn: vec![] };
+        let mut t = Terminal::new(TestBackend::new(40, 5)).unwrap();
+        t.draw(|f| small.draw(f, f.area(), &|_| None, &mut host)).unwrap();
+        assert!(host.drawn.is_empty(), "a window too short for the whole picture shows none of it");
+        // off: labels only, no reserved rows
+        let mut off = FakeHost { on: false, drawn: vec![] };
+        let mut t = Terminal::new(TestBackend::new(40, 20)).unwrap();
+        t.draw(|f| s.draw(f, f.area(), &|_| None, &mut off)).unwrap();
+        assert!(off.drawn.is_empty());
+        let b = t.backend().buffer().clone();
+        let rows: Vec<String> = (0..20).map(|y| (0..40).map(|x| b[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string()).collect();
+        let (cap, bot) = (rows.iter().position(|l| l == "[image: pic.png]").unwrap(), rows.iter().position(|l| l == "bottom").unwrap());
+        assert!(bot <= cap + 3, "without pictures the text closes up again: {rows:?}");
+    }
+
     #[test]
     fn hostile_text_never_reaches_a_cell_as_a_control_character() {
         let mut s = session("<p>a\u{1b}[31mb\u{9b}c<img alt=\"x\u{1b}y\" src=\"p.png\"></p>");
@@ -1219,7 +1326,7 @@ mod tests {
             notes += 1;
             for w in [20u16, 45, 90] {
                 let mut t = Terminal::new(TestBackend::new(w, 12)).unwrap();
-                t.draw(|f| s.draw(f, f.area(), &|_| None)).unwrap();
+                t.draw(|f| s.draw(f, f.area(), &|_| None, &mut NoImages)).unwrap();
                 let ol = s.doc.outline();
                 let lay = s.layout.as_ref().unwrap();
                 for (i, bi) in ol.blocks.iter().enumerate() {
@@ -1239,14 +1346,14 @@ mod tests {
             let mut t = Terminal::new(TestBackend::new(60, 14)).unwrap();
             for step in 0..400 {
                 press(&mut s, if step % 7 == 6 { KeyCode::PageDown } else { KeyCode::Down });
-                t.draw(|f| s.draw(f, f.area(), &|_| None)).unwrap();
+                t.draw(|f| s.draw(f, f.area(), &|_| None, &mut NoImages)).unwrap();
             }
             s.key(k(KeyCode::End, KeyModifiers::CONTROL));
             typ(&mut s, "hi ");
             press(&mut s, KeyCode::Enter);
-            t.draw(|f| s.draw(f, f.area(), &|_| None)).unwrap();
+            t.draw(|f| s.draw(f, f.area(), &|_| None, &mut NoImages)).unwrap();
             ctrl(&mut s, 'z'); ctrl(&mut s, 'z');
-            t.draw(|f| s.draw(f, f.area(), &|_| None)).unwrap();
+            t.draw(|f| s.draw(f, f.area(), &|_| None, &mut NoImages)).unwrap();
         }
         eprintln!("{notes} notes, {positions} cursor positions mapped to screen cells and back ({clipped} inside clipped objects)");
     }

@@ -194,6 +194,13 @@ impl Db {
         }
     }
 
+    /// Delete an attachment (soft delete, like Trilium).
+    pub fn delete_attachment(&self, attachment_id: &str) -> Result<()> {
+        let tx = self.begin()?;
+        self.mark_deleted("attachments", "attachmentId", attachment_id, None)?;
+        tx.commit()
+    }
+
     pub fn attachments(&self, note_id: &str) -> Result<Vec<AttachmentInfo>> {
         let mut st = self.conn.prepare(
             "SELECT a.attachmentId,a.role,a.mime,a.title,COALESCE(LENGTH(b.content),0),a.isProtected FROM attachments a LEFT JOIN blobs b ON b.blobId=a.blobId

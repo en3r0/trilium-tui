@@ -308,6 +308,12 @@ fn todo_label(run: &[Node]) -> Option<&El> {
     match run { [Node::El(e)] if e.name == "label" && has_class(e, "todo-list__label") => Some(e), _ => None }
 }
 
+fn atom_info(e: &El) -> AtomInfo {
+    let src = (e.name == "img").then(|| attr(e, "src").map(decode_entities)).flatten();
+    let href = (e.name == "a").then(|| attr(e, "href").map(decode_entities)).flatten();
+    AtomInfo { label: atom_label(e), src, href }
+}
+
 fn atom_label(e: &El) -> String {
     match e.name.as_str() {
         "img" => {
@@ -325,7 +331,11 @@ fn atom_label(e: &El) -> String {
 // ------------------------------------------------------------------ segments
 
 #[derive(Clone, Debug)]
-pub enum SegKind { Text(Vec<char>), Atom(String), Br, Anchor }
+pub enum SegKind { Text(Vec<char>), Atom(AtomInfo), Br, Anchor }
+
+/// An unbreakable inline object: how to show it, plus the picture source or link target it carries.
+#[derive(Clone, Debug)]
+pub struct AtomInfo { pub label: String, pub src: Option<String>, pub href: Option<String> }
 
 #[derive(Clone, Debug)]
 pub struct Seg {
@@ -338,7 +348,7 @@ pub struct Seg {
 }
 
 impl Seg {
-    fn len(&self) -> usize { match &self.kind { SegKind::Text(c) => c.len(), SegKind::Atom(_) | SegKind::Br => 1, SegKind::Anchor => 0 } }
+    fn len(&self) -> usize { match &self.kind { SegKind::Text(c) => c.len(), SegKind::Atom (_) | SegKind::Br => 1, SegKind::Anchor => 0 } }
 }
 
 fn build_segs(run: &[Node], base: usize) -> Vec<Seg> {
@@ -360,8 +370,8 @@ fn walk_seg(n: &Node, path: &mut Vec<usize>, marks: u16, link: Option<usize>, ou
             if !chars.is_empty() { out.push(Seg { path: path.clone(), kind: SegKind::Text(chars), marks, link }); }
         }
         (Kind::Break, _) => out.push(Seg { path: path.clone(), kind: SegKind::Br, marks, link }),
-        (Kind::Atom, Node::El(e)) => out.push(Seg { path: path.clone(), kind: SegKind::Atom(atom_label(e)), marks, link }),
-        (Kind::Opaque, _) => out.push(Seg { path: path.clone(), kind: SegKind::Atom("[object]".into()), marks, link }),
+        (Kind::Atom, Node::El(e)) => out.push(Seg { path: path.clone(), kind: SegKind::Atom(atom_info(e)), marks, link }),
+        (Kind::Opaque, _) => out.push(Seg { path: path.clone(), kind: SegKind::Atom(AtomInfo { label: "[object]".into(), src: None, href: None }), marks, link }),
         (Kind::Inline | Kind::Container, Node::El(e)) => {
             let m = marks | mark_of(&e.name);
             let l = if e.name == "a" { Some(path.len() - 1) } else { link };
@@ -402,6 +412,9 @@ fn same_link(a: &Seg, b: &Seg) -> bool {
 pub struct Unit {
     pub ch: char,
     pub label: Option<String>,
+    /// picture source of an image, link target of a note link
+    pub src: Option<String>,
+    pub href: Option<String>,
     pub marks: u16,
     pub br: bool,
 }
@@ -582,6 +595,9 @@ impl Walk {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct Cursor { pub block: usize, pub off: usize }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum LinkTarget { Href(String), Image(String) }
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ListKind { Bullet, Numbered, Todo }
 
@@ -637,9 +653,9 @@ impl Doc {
         let mut out = vec![];
         for s in build_segs(self.run(b), b.start) {
             match s.kind {
-                SegKind::Text(cs) => out.extend(cs.into_iter().map(|ch| Unit { ch, label: None, marks: s.marks, br: false })),
-                SegKind::Atom(l) => out.push(Unit { ch: '\u{fffc}', label: Some(l), marks: s.marks, br: false }),
-                SegKind::Br => out.push(Unit { ch: '\n', label: None, marks: s.marks, br: true }),
+                SegKind::Text(cs) => out.extend(cs.into_iter().map(|ch| Unit { ch, label: None, src: None, href: None, marks: s.marks, br: false })),
+                SegKind::Atom(a) => out.push(Unit { ch: '\u{fffc}', label: Some(a.label), src: a.src, href: a.href, marks: s.marks, br: false }),
+                SegKind::Br => out.push(Unit { ch: '\n', label: None, src: None, href: None, marks: s.marks, br: true }),
                 SegKind::Anchor => {}
             }
         }
@@ -1215,6 +1231,82 @@ impl Doc {
         Some((Cursor { block: c.block, off: st }, Cursor { block: c.block, off: en }, href))
     }
 
+    // -------------------------------------------------------------- links & images
+
+    /// Put an inline node at the cursor.
+    fn insert_inline(&mut self, c: Cursor, node: Node, units: usize) -> Cursor {
+        let ol = self.outline();
+        let Some(bi) = ol.blocks.get(c.block) else { return c };
+        let off = c.off.min(self.block_len(&bi.block));
+        let _ = self.edit_run(&bi.block.clone(), |run| {
+            let run = if is_phantom(&run) { vec![] } else { run };
+            with_content(run, |run| {
+                let (l, r) = split_nodes(run, off);
+                let mut out = l;
+                out.push(node);
+                out.extend(r);
+                out
+            })
+        });
+        Cursor { block: c.block, off: off + units }
+    }
+
+    /// A link to another note, shown with its title (Trilium keeps `reference-link` titles current).
+    pub fn insert_note_link(&mut self, c: Cursor, note_id: &str, title: &str) -> Cursor {
+        let shown = if title.trim().is_empty() { note_id } else { title };
+        let a = new_el("a", &[("class", "reference-link"), ("href", &format!("#root/{note_id}"))], vec![text_node(shown)]);
+        self.insert_inline(c, a, 1)
+    }
+
+    /// A link whose text is `text`, at the cursor.
+    pub fn insert_link_text(&mut self, c: Cursor, href: &str, text: &str) -> Cursor {
+        let a = new_el("a", &[("href", &htmltree::escape_attr(href))], vec![text_node(text)]);
+        self.insert_inline(c, a, text.chars().count())
+    }
+
+    /// A picture at the cursor: as its own block (`<figure class="image">`, like Trilium's editor) when the cursor is in a plain
+    /// paragraph, inline elsewhere. Returns where typing continues.
+    pub fn insert_image(&mut self, c: Cursor, src: &str) -> Cursor {
+        let ol = self.outline();
+        let Some(bi) = ol.blocks.get(c.block) else { return c };
+        let b = bi.block.clone();
+        let off = c.off.min(self.block_len(&b));
+        let img = new_el("img", &[("src", src)], vec![]);
+        let el = if b.parent.is_empty() { None } else { el_at(&self.nodes, &b.parent).cloned() };
+        match el {
+            Some(el) if matches!(el.name.as_str(), "p" | "div") && b.start == 0 && b.end == el.kids.len() => {
+                let run = if is_phantom(&el.kids) { vec![] } else { el.kids.clone() };
+                let (l, r) = split_nodes(run, off);
+                let (l, mut r) = (tidy(l), tidy(r));
+                let mut repl = vec![];
+                let has_left = !l.is_empty();
+                if has_left { repl.push(Node::El(El { kids: l, ..el.clone() })); }
+                repl.push(new_el("figure", &[("class", "image")], vec![img]));
+                if r.is_empty() { r = phantom(); }
+                repl.push(Node::El(El { kids: r, ..el }));
+                if let Some((i, pp)) = b.parent.split_last() {
+                    if let Some(k) = kids_at_mut(&mut self.nodes, pp) { k.splice(*i..=*i, repl); }
+                }
+                Cursor { block: c.block + usize::from(has_left) + 1, off: 0 }
+            }
+            _ => self.insert_inline(c, img, 1),
+        }
+    }
+
+    /// What Ctrl+O / Ctrl+Enter acts on at the cursor: a link target, or a picture.
+    pub fn target_at(&self, c: Cursor) -> Option<LinkTarget> {
+        if let Some((_, _, h)) = self.link_at(c) { return Some(LinkTarget::Href(h)); }
+        let ol = self.outline();
+        let units = self.units(&ol.blocks.get(c.block)?.block);
+        for k in [Some(c.off), c.off.checked_sub(1)].into_iter().flatten() {
+            if let Some(u) = units.get(k) {
+                if let Some(h) = &u.href { return Some(LinkTarget::Href(h.clone())); }
+                if let Some(s) = &u.src { return Some(LinkTarget::Image(s.clone())); }
+            }
+        }
+        None
+    }
+
     // -------------------------------------------------------------- autoformat
 
     /// After a space was typed at the start of a paragraph (`- `, `1. `, `# `, `[ ] `, `> `), turn the paragraph into what it asked for.
@@ -1696,6 +1788,41 @@ mod tests {
         assert_eq!(d.html(), "<p>a<img src=\"x.png\" alt=\"pic\">Zb</p>");
         d.delete_back(at(0, 2));
         assert_eq!(d.html(), "<p>aZb</p>", "backspace after the image removes the image");
+    }
+
+    #[test]
+    fn note_links_url_links_and_images_insert_where_the_cursor_is() {
+        let mut d = doc("<p>see  now</p>");
+        let c = d.insert_note_link(at(0, 4), "abc123", "My <note>");
+        assert_eq!(d.html(), "<p>see <a class=\"reference-link\" href=\"#root/abc123\">My &lt;note&gt;</a> now</p>");
+        assert_eq!(c, at(0, 5));
+        assert_eq!(d.units(&d.outline().blocks[0].block)[4].label.as_deref(), Some("My <note>"));
+        assert_eq!(d.target_at(at(0, 5)), Some(LinkTarget::Href("#root/abc123".into())));
+        assert_eq!(d.target_at(at(0, 4)), Some(LinkTarget::Href("#root/abc123".into())));
+        assert_eq!(d.target_at(at(0, 0)), None);
+        let c = d.insert_link_text(at(0, 0), "http://x/?a=1&b=2", "site");
+        assert_eq!(c, at(0, 4));
+        assert!(d.html().starts_with("<p><a href=\"http://x/?a=1&amp;b=2\">site</a>see "), "{}", d.html());
+        assert_eq!(d.target_at(at(0, 2)), Some(LinkTarget::Href("http://x/?a=1&b=2".into())));
+        // pictures: their own block in a paragraph, inline elsewhere
+        let mut d = doc("<p>before after</p>");
+        let c = d.insert_image(at(0, 7), "api/attachments/A1/image/pic.png");
+        assert_eq!(d.html(), "<p>before </p><figure class=\"image\"><img src=\"api/attachments/A1/image/pic.png\"></figure><p>after</p>");
+        assert_eq!(c, at(2, 0));
+        assert_eq!(d.target_at(at(1, 0)), Some(LinkTarget::Image("api/attachments/A1/image/pic.png".into())));
+        let mut d = doc("<p>&nbsp;</p>");
+        let c = d.insert_image(at(0, 0), "api/images/N/x.png");
+        assert_eq!(d.html(), "<figure class=\"image\"><img src=\"api/images/N/x.png\"></figure><p>&nbsp;</p>");
+        assert_eq!(c, at(1, 0));
+        d.insert_text(c, "hi");
+        assert!(d.html().ends_with("<p>hi</p>"));
+        let mut d = doc("<ul><li>item</li></ul>");
+        let c = d.insert_image(at(0, 4), "api/images/N/x.png");
+        assert_eq!(d.html(), "<ul><li>item<img src=\"api/images/N/x.png\"></li></ul>");
+        assert_eq!(c, at(0, 5));
+        let mut d = doc("<p>x</p>");
+        d.insert_image(at(0, 0), "a.png");
+        assert!(d.html().starts_with("<figure class=\"image\"><img src=\"a.png\"></figure><p>x</p>"), "{}", d.html());
     }
 
     #[test]

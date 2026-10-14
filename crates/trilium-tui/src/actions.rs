@@ -248,6 +248,7 @@ impl App {
         let Overlay::Prompt(p) = std::mem::replace(&mut self.overlay, Overlay::None) else { return };
         let text: String = p.text.iter().collect();
         match p.kind {
+            PromptKind::InsertImage => self.insert_image_from(&text),
             PromptKind::Unlock => self.finish_unlock(&text),
             PromptKind::DeleteBackups => {
                 self.status = if text.trim().eq_ignore_ascii_case("yes") { format!("deleted {} backup(s)", self.db.delete_backups()) } else { "nothing deleted".into() };
@@ -618,7 +619,7 @@ impl App {
         }
         match out {
             Outcome::None | Outcome::ToRich => {}
-            Outcome::Close => self.overlay = Overlay::None,
+            Outcome::Close => { self.overlay = Overlay::None; self.finish_new_attachments(); }
             Outcome::Save | Outcome::SaveAndClose => {
                 let stored = self.db.note_content(&id).ok().flatten().unwrap_or_default();
                 if let Overlay::Edit(s) = &mut self.overlay { if s.needs_overwrite_confirmation(&stored) { return; } }
@@ -627,7 +628,7 @@ impl App {
                 match res {
                     Ok(()) => {
                         if !unchanged { self.changed(Some(&id)); }
-                        if out == Outcome::SaveAndClose { self.overlay = Overlay::None; self.status = "saved".into(); }
+                        if out == Outcome::SaveAndClose { self.overlay = Overlay::None; self.status = "saved".into(); self.finish_new_attachments(); }
                         else {
                             let stored = self.db.note_content(&id).ok().flatten().unwrap_or(text);
                             if let Overlay::Edit(s) = &mut self.overlay { s.saved(stored); }
@@ -643,6 +644,35 @@ impl App {
         }
     }
 
+    /// Delete pictures that were stored for an edit but ended up in no saved note text (discarded edit, removed image).
+    pub fn finish_new_attachments(&mut self) {
+        for (note, att) in std::mem::take(&mut self.new_attachments) {
+            let stored = self.db.note_content(&note).ok().flatten().unwrap_or_default();
+            if !stored.contains(&att) { let _ = self.db.delete_attachment(&att); }
+        }
+    }
+
+    /// `Alt+P` answer: a file path (also as dropped onto the terminal) or, when empty, the clipboard's image.
+    fn insert_image_from(&mut self, input: &str) {
+        let Some(note) = self.rich.as_ref().map(|r| r.note_id.clone()) else { return };
+        let (bytes, name) = match image_bytes_from(input) {
+            Ok(v) => v,
+            Err(e) => { self.status = e; return; }
+        };
+        let Some(mime) = image_mime(&bytes) else { self.status = "that isn't a PNG, JPEG, GIF or WebP picture".into(); return };
+        if image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok()).is_none() {
+            self.status = "can't read that picture".into();
+            return;
+        }
+        let id = match self.db.add_attachment(&note, &name, mime, "image", &bytes) {
+            Ok(id) => id,
+            Err(e) => { self.fail("store picture", e); return; }
+        };
+        self.new_attachments.push((note, id.clone()));
+        if let Some(r) = self.rich.as_mut() { r.insert_image(&format!("api/attachments/{id}/image/{}", percent_encode(&name))); }
+        self.status = format!("inserted {name} ({} KB)", bytes.len().div_ceil(1000));
+    }
+
     /// Keys while the note pane is being edited in place.
     pub fn rich_key(&mut self, ev: KeyEvent) {
         use crate::rich_view::Outcome;
@@ -651,7 +681,41 @@ impl App {
         let id = r.note_id.clone();
         match out {
             Outcome::None => { self.rich = Some(r); }
-            Outcome::Close => { self.status.clear(); }
+            Outcome::ToggleImages => { self.rich = Some(r); self.toggle_inline_images(); }
+            Outcome::PickNote => { self.rich = Some(r); self.open_picker(PickerKind::LinkNote); }
+            Outcome::PickImage => {
+                self.rich = Some(r);
+                self.open_prompt(PromptKind::InsertImage, "Image file (drop or paste a path; empty = image on the clipboard)", "");
+            }
+            Outcome::Follow(target) => {
+                use trilium_core::richtext::LinkTarget;
+                self.rich = Some(r);
+                match target {
+                    LinkTarget::Image(src) => match self.db.image_source_bytes(&src) {
+                        Ok(Some((name, mime, bytes))) => self.show_picture(&name, &name, &mime, bytes),
+                        Ok(None) => self.status = format!("picture '{src}' isn't in the replica"),
+                        Err(e) => self.status = format!("{e:#}"),
+                    },
+                    LinkTarget::Href(href) => {
+                        let href = href.trim().to_string();
+                        if let Some(id) = crate::app::note_id_from_href(&href) {
+                            let dirty = self.rich.as_ref().is_some_and(|r| r.dirty());
+                            if !self.model.notes.contains_key(&id) { self.status = format!("linked note {id} not found (not synced or deleted)"); }
+                            else if dirty { self.status = "save first (Ctrl+S) or close the editor: following a note link leaves this note".into(); }
+                            else {
+                                self.rich = None;
+                                self.finish_new_attachments();
+                                self.open_note(&id, true, true);
+                                self.focus = Focus::Note;
+                            }
+                        } else if href.starts_with("http://") || href.starts_with("https://") || href.starts_with("mailto:") {
+                            let ok = std::process::Command::new("xdg-open").arg(&href).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().is_ok();
+                            self.status = if ok { format!("opened {href}") } else { format!("xdg-open failed for {href}") };
+                        } else { self.status = format!("can't follow '{href}'"); }
+                    }
+                }
+            }
+            Outcome::Close => { self.status.clear(); self.finish_new_attachments(); }
             Outcome::ToSource => {
                 // carry unsaved edits over to the source editor
                 let text = r.html();
@@ -676,7 +740,7 @@ impl App {
                 match res {
                     Ok(()) => {
                         if !unchanged { self.changed(Some(&id)); }
-                        if out == Outcome::SaveAndClose { self.status = "saved".into(); }
+                        if out == Outcome::SaveAndClose { self.status = "saved".into(); self.finish_new_attachments(); }
                         else {
                             let stored = self.db.note_content(&id).ok().flatten().unwrap_or(text);
                             r.saved(stored);
@@ -816,4 +880,67 @@ impl App {
         let secs = self.db.protected_session_timeout();
         if secs > 0 && self.last_input.elapsed().as_secs() >= secs { self.lock_protected("protected notes locked after inactivity"); }
     }
+}
+
+const MAX_PICTURE_BYTES: usize = 20 * 1024 * 1024;
+
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) { out.push(b as char); } else { out.push_str(&format!("%{b:02X}")); }
+    }
+    out
+}
+
+/// A path as a terminal drop or paste delivers it: quotes, `file://`, `\ ` escapes, `~/`.
+fn clean_path(input: &str) -> std::path::PathBuf {
+    let mut t = input.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
+    if let Some(rest) = t.strip_prefix("file://") {
+        let b = rest.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'%' && i + 2 < b.len() {
+                if let Ok(v) = u8::from_str_radix(&rest[i + 1..i + 3], 16) { out.push(v); i += 3; continue; }
+            }
+            out.push(b[i]);
+            i += 1;
+        }
+        t = String::from_utf8_lossy(&out).into_owned();
+    }
+    let t = t.replace("\\ ", " ");
+    match t.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir().map(|h| h.join(rest)).unwrap_or_else(|| t.clone().into()),
+        None => t.into(),
+    }
+}
+
+fn image_mime(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0x89, b'P', b'N', b'G']) { Some("image/png") }
+    else if b.starts_with(&[0xFF, 0xD8, 0xFF]) { Some("image/jpeg") }
+    else if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") { Some("image/gif") }
+    else if b.len() > 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP" { Some("image/webp") }
+    else { None }
+}
+
+/// The picture to insert: a file, or (for empty input) whatever image the clipboard holds. Returns (bytes, file name).
+fn image_bytes_from(input: &str) -> Result<(Vec<u8>, String), String> {
+    if input.trim().is_empty() {
+        for (prog, args) in [("wl-paste", &["--type", "image/png"][..]), ("xclip", &["-selection", "clipboard", "-t", "image/png", "-o"][..])] {
+            if let Ok(o) = std::process::Command::new(prog).args(args).stderr(std::process::Stdio::null()).output() {
+                if o.status.success() && !o.stdout.is_empty() {
+                    if o.stdout.len() > MAX_PICTURE_BYTES { return Err("the clipboard picture is over 20 MB".into()); }
+                    return Ok((o.stdout, format!("pasted-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S"))));
+                }
+            }
+        }
+        return Err("no picture on the clipboard (type or drop a file path instead)".into());
+    }
+    let path = clean_path(input);
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() { return Err(format!("{} isn't a file", path.display())); }
+    if meta.len() as usize > MAX_PICTURE_BYTES { return Err("that picture is over 20 MB".into()); }
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let name = crate::images::safe_name(&path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), "picture.png");
+    Ok((bytes, name))
 }
