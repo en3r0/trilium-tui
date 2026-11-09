@@ -7,10 +7,14 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use std::collections::BTreeMap;
 
-/// The sync protocol version of the newest Trilium source (app_info.ts); servers refuse other versions.
-pub const SYNC_VERSION: u64 = 40;
-/// Versions we can speak: 39 is every released server up to v0.106.0, 40 only changed the include-note content format.
-const SUPPORTED_SYNC_VERSIONS: &[u64] = &[39, 40];
+/// The sync protocol version of the newest Trilium release (app_info.ts); servers refuse other versions.
+pub const SYNC_VERSION: u64 = 41;
+/// Versions we can speak: 39 is every released server up to v0.106.x, 40 only changed the include-note content format
+/// (never released), 41 (v0.107.0) made the in-app `_help` subtree virtual: servers no longer store or sync it, and
+/// their migration deletes it without tombstones (see `Db::purge_help_subtree`).
+const SUPPORTED_SYNC_VERSIONS: &[u64] = &[39, 40, 41];
+/// First protocol version whose servers do not hold the `_help` subtree.
+const VIRTUAL_HELP_SYNC_VERSION: u64 = 41;
 
 /// The server's own version from its "Non-matching sync versions, local is version 39, remote is 40" refusal.
 fn server_sync_version(msg: &str) -> Option<u64> {
@@ -61,6 +65,8 @@ pub struct SyncOutcome {
     /// hash sectors that differed and were queued for sending again
     pub repaired: usize,
     pub sectors_checked: usize,
+    /// the replica still held the in-app help subtree that servers >= v0.107.0 no longer have; it was removed
+    pub help_purged: bool,
 }
 
 #[derive(Debug)]
@@ -259,6 +265,9 @@ impl SyncClient {
             out.rounds += 1;
             if out.rounds > MAX_SYNC_ROUNDS { bail!("sync did not converge after {MAX_SYNC_ROUNDS} rounds, giving up for now"); }
             self.login(secret)?;
+            // a server that migrated to virtual help notes dropped them without tombstones: do the same here,
+            // or the stale rows would make every sector hash differ and be pushed back at the server
+            if self.sync_version >= VIRTUAL_HELP_SYNC_VERSION && db.purge_help_subtree()? > 0 { out.help_purged = true; }
             if db.state("serverSyncVersion")?.as_deref() != Some(&self.sync_version.to_string()) { db.set_state("serverSyncVersion", &self.sync_version.to_string())?; }
             let s = self.pull(db, &mut progress)?;
             out.stats.applied += s.applied; out.stats.skipped_known += s.skipped_known; out.stats.local_newer += s.local_newer;
@@ -359,9 +368,9 @@ mod version_tests {
                 let mut buf = vec![0u8; 8192];
                 let n = s.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]).to_string();
-                let (status, body) = if req.contains("/api/login/sync") && req.contains("\"syncVersion\":40") {
+                let (status, body) = if req.contains("/api/login/sync") && req.contains(&format!("\"syncVersion\":{SYNC_VERSION}")) {
                     r2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    ("400 Bad Request", r#"{"message":"Non-matching sync versions, local is version 39, remote is 40."}"#.to_string())
+                    ("400 Bad Request", r#"{"message":"Non-matching sync versions, local is version 39, remote is 41."}"#.to_string())
                 } else if req.contains("/api/login/sync") {
                     ("200 OK", r#"{"instanceId":"srv","maxEntityChangeId":1}"#.to_string())
                 } else { ("200 OK", "{}".to_string()) };

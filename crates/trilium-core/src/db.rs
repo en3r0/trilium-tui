@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, path::Path};
 
 const SCHEMA: &str = include_str!("schema.sql");
 /// Highest Trilium database version (migration number) this build has been verified against.
-pub const KNOWN_DB_VERSION: i64 = 241;
+pub const KNOWN_DB_VERSION: i64 = 242;
 /// Tables a sync change may touch (also guards the dynamic SQL below).
 const ENTITY_TABLES: &[(&str, &str)] = &[
     ("notes", "noteId"), ("branches", "branchId"), ("attributes", "attributeId"),

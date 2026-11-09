@@ -184,6 +184,32 @@ impl Db {
         Ok(())
     }
 
+    /// Mirrors Trilium's migration 242 (v0.107.0), which turned the in-app help (`_help…` notes) into virtual notes: the rows
+    /// and their `entity_changes` are deleted outright, with no tombstones, so a replica that synced before the upgrade has to
+    /// do the same by itself. Returns the number of notes removed (0 once done, so it is safe to run on every sync).
+    pub fn purge_help_subtree(&mut self) -> Result<usize> {
+        const P: &str = "LIKE '\\_help%' ESCAPE '\\'";
+        let has: Option<i64> = self.conn.query_row(
+            &format!("SELECT 1 FROM notes WHERE noteId {P} UNION ALL SELECT 1 FROM entity_changes WHERE entityId {P} LIMIT 1"), [], |r| r.get(0)).optional()?;
+        if has.is_none() { return Ok(0); }
+        let tx = self.begin()?;
+        let n: i64 = self.conn.query_row(&format!("SELECT COUNT(*) FROM notes WHERE noteId {P}"), [], |r| r.get(0))?;
+        self.conn.execute_batch(&format!("
+            DELETE FROM entity_changes WHERE entityName='branches' AND entityId IN (SELECT branchId FROM branches WHERE noteId {P} OR parentNoteId {P});
+            DELETE FROM entity_changes WHERE entityName='attributes' AND entityId IN (SELECT attributeId FROM attributes WHERE noteId {P});
+            DELETE FROM entity_changes WHERE entityName='revisions' AND entityId IN (SELECT revisionId FROM revisions WHERE noteId {P});
+            DELETE FROM entity_changes WHERE entityName='attachments' AND entityId IN (SELECT attachmentId FROM attachments WHERE ownerId {P});
+            DELETE FROM entity_changes WHERE entityId {P};
+            DELETE FROM branches WHERE noteId {P} OR parentNoteId {P};
+            DELETE FROM attributes WHERE noteId {P};
+            DELETE FROM revisions WHERE noteId {P};
+            DELETE FROM attachments WHERE ownerId {P};
+            DELETE FROM notes WHERE noteId {P};"))?;
+        tx.commit()?;
+        self.sweep_orphan_blobs()?; // as the server does: orphaned blobs go with their index entries
+        Ok(n as usize)
+    }
+
     /// Delete blobs that no note, attachment or revision refers to, with their change rows and index entries
     /// (what `drop_blob_if_unused` does one blob at a time). Returns how many went.
     pub fn sweep_orphan_blobs(&self) -> Result<usize> {
