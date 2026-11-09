@@ -15,7 +15,7 @@ It ships two programs: `trilium-tui` (the interface) and `trilium-cli` (the same
 
 - **Instant.** Browse, search and edit against a local SQLite database. Sync happens in the background.
 - **Edit like a document, not like HTML.** Press `e` and edit formatted text right in the note pane: no tags on screen, bold/italic/code, lists, tables, links to other notes, pictures. Only the paragraph you touch is rewritten; the rest of the note is saved byte for byte. And when you want full control, edit the stored source too: `Ctrl+e` opens it in the built-in editor, `Shift+E` in your own `$EDITOR`. Nothing in a note is out of reach.
-- **Safe with real data.** Writes copy Trilium's own bookkeeping (revisions, hashes, entity changes) and were checked against a real Trilium v0.106.0 server. A daily backup is made automatically, and unsaved text is kept in `lost-edits/` if a save ever fails.
+- **Safe with real data.** Writes copy Trilium's own bookkeeping (revisions, hashes, entity changes) and were checked against real Trilium v0.106.0 and v0.107.0 servers. A daily backup is made automatically, and unsaved text is kept in `lost-edits/` if a save ever fails.
 - **Trilium's search, unchanged.** `#label`, `~relation.title`, `note.title *=* x`, `orderBy`: the full query syntax.
 - **Bring your notes with you.** Import Obsidian, Notion, Anytype, Google Keep, Evernote and OPML. Export to Trilium ZIP, Markdown, OPML, Evernote, or a static website.
 - **Encrypted notes work.** Protected notes use Trilium's own encryption and stay compatible with the web app.
@@ -126,7 +126,9 @@ trilium-cli search '#todo' --json | jq '.[].title'
 
 **Does it replace the Trilium server?** No. It is a client, like the desktop app. Run a server if you want sync between devices.
 
-**Which Trilium versions work?** Released Trilium Next servers up to v0.106.0 (sync protocol 39) and the development branch (40). If a server's database is newer than what this build was tested against, the app opens read-only instead of risking your data.
+**Which Trilium versions work?** Released Trilium Next servers up to v0.107.0 (sync protocol 39 to 41). Sync, push and the content hash check were verified against v0.107.0. If a server's database is newer than what this build was tested against, the app opens read-only instead of risking your data.
+
+**What about the new v0.107.0 features?** The new text-note features (editable embedded notes, live excerpts, block references, multicolumn layouts, embedded drawings and attachments, merged table cells) are **untested** in trilium-tui. They should sync like any other note, and the in-place editor is designed to open notes it cannot round-trip as source rather than rewrite them, but neither has been tried on these features, and how they look in the reading view and how the editor treats them has not been checked. Edit such notes in Trilium itself until this is verified.
 
 **Can I use it without a server?** Yes: `trilium-tui --new`.
 
